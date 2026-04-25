@@ -1,36 +1,64 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FridgeAppShell } from "@/components/fridge/app-shell";
-import { getToken, useAuth } from "@/lib/auth";
+import { getToken, setDeviceToken, useAuth } from "@/lib/auth";
 import { m } from "@/paraglide/messages.js";
 
 /**
  * Production home — the always-on fridge device shell.
- * Single-route SPA with state-driven tabs (Chat / Notes / Calendar / Settings)
- * matching the design preview shape; no per-tab file route needed.
  *
- * Auth note: Architect §4 ships a device JWT via the pairing OAuth flow.
- * Until that lands, we accept the existing user JWT (issued by /auth/login)
- * which the backend will treat as the device token (§4.2 shadow user).
+ * Boot sequence:
+ *   1. If the URL carries `?token=` (the OAuth callback redirect lands here
+ *      via Architect §4.1's `/settings?paired=1&token=…` shape), consume it
+ *      into localStorage and strip it from the URL before rendering.
+ *   2. If a device JWT exists in localStorage → render the 4-tab kiosk shell.
+ *   3. Otherwise → redirect to `/pair` to start the first-time pairing flow.
+ *
+ * Legacy `/login` is still available as a developer escape hatch but is no
+ * longer the default entry point.
  */
 export default function HomePage() {
-  const router = useRouter();
-  const { isLoading } = useAuth();
+  return (
+    <Suspense fallback={<Loading />}>
+      <HomePageInner />
+    </Suspense>
+  );
+}
 
+function HomePageInner() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const { isLoading } = useAuth();
+  const [tokenAccepted, setTokenAccepted] = useState(false);
+
+  // Step 1: catch the OAuth callback's `?token=` and persist it before the
+  // useAuth hook decides to redirect us to /pair. The setState lives behind
+  // a guard branch and feeds a one-shot "accepted" flag so the second effect
+  // doesn't bounce us to /pair while the first is settling — known false
+  // positive of React 19's `react-hooks/set-state-in-effect` rule.
   useEffect(() => {
-    if (!isLoading && !getToken()) {
-      router.replace("/login");
+    const callbackToken = params.get("token");
+    if (callbackToken && !getToken()) {
+      setDeviceToken(callbackToken);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTokenAccepted(true);
+      router.replace("/");
     }
-  }, [isLoading, router]);
+  }, [params, router]);
+
+  // Step 2 / 3: once the auth state has settled, send unpaired devices to /pair.
+  useEffect(() => {
+    if (isLoading) return;
+    if (tokenAccepted) return;
+    if (!getToken()) {
+      router.replace("/pair");
+    }
+  }, [isLoading, router, tokenAccepted]);
 
   if (isLoading) {
-    return (
-      <main className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-muted-foreground">{m.common_loading()}</p>
-      </main>
-    );
+    return <Loading />;
   }
 
   if (!getToken()) {
@@ -38,4 +66,12 @@ export default function HomePage() {
   }
 
   return <FridgeAppShell />;
+}
+
+function Loading() {
+  return (
+    <main className="flex flex-1 items-center justify-center">
+      <p className="text-sm text-muted-foreground">{m.common_loading()}</p>
+    </main>
+  );
 }

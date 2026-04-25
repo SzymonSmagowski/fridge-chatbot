@@ -11,13 +11,13 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("App shell", () => {
-  test("[e2e] AppShell: unauthenticated user gets redirected to /login", async ({ page }) => {
+  test("[e2e] AppShell: unauthenticated user gets redirected to /pair", async ({ page }) => {
     // Clear token first — seedToken added it, so we undo for this test only.
     await page.addInitScript(() => {
       window.localStorage.removeItem("fridge-chatbot-token");
     });
     await page.goto("/");
-    await expect(page).toHaveURL(/\/login/);
+    await expect(page).toHaveURL(/\/pair/);
   });
 
   test("[e2e] AppShell: authenticated user lands on Notes by default", async ({ page }) => {

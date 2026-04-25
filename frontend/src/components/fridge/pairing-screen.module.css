@@ -1,0 +1,118 @@
+/* Pairing screen — uses the locked design tokens defined on .fridgeRoot. */
+
+.stage {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+}
+
+.card {
+  width: 100%;
+  max-width: 560px;
+  background: var(--card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-card);
+  padding: 40px 36px 32px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: center;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+}
+
+.title {
+  font-family: var(--font-varela-round), system-ui, sans-serif;
+  font-size: 34px;
+  line-height: 1.15;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0;
+}
+
+.subtitle {
+  margin: 0 0 8px;
+  font-size: 17px;
+  color: var(--muted-fg);
+  line-height: 1.5;
+}
+
+.primaryButton {
+  margin-top: 14px;
+  height: 64px;
+  border-radius: var(--radius-cta);
+  background: var(--primary);
+  color: #fff;
+  font-family: var(--font-nunito-sans), system-ui, sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  border: 0;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    box-shadow 200ms ease,
+    background-color 200ms ease,
+    opacity 200ms ease;
+  box-shadow: var(--shadow-sm);
+}
+.primaryButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+.primaryButton:active:not(:disabled) {
+  transform: translateY(0);
+}
+.primaryButton:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+.primaryButton:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.hint {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--muted-fg);
+}
+
+.escapeLink {
+  margin-top: 18px;
+  font-size: 13px;
+  color: var(--muted-fg);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.escapeLink:hover {
+  color: var(--fg);
+}
+
+.errorBox {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: var(--fridge-radius);
+  background: rgba(196, 138, 44, 0.12); /* warm amber wash */
+  border: 1px solid rgba(196, 138, 44, 0.35);
+  color: var(--fg);
+  text-align: left;
+  font-size: 14px;
+}
+.errorBox strong {
+  font-weight: 700;
+  color: var(--destructive);
+}

@@ -21,6 +21,17 @@ export function clearToken(): void {
   window.localStorage.removeItem(TOKEN_KEY);
 }
 
+/**
+ * Stores the device JWT issued by the pairing OAuth callback (Architect §4.2).
+ * Clears any stale legacy user-JWT first so the next request reads the
+ * fresh device token. Same storage slot as `saveToken()` — there is one
+ * Authorization header, one localStorage key.
+ */
+export function setDeviceToken(token: string): void {
+  clearToken();
+  saveToken(token);
+}
+
 type AuthState = {
   user: UserPublic | null;
   isLoading: boolean;
