@@ -1,0 +1,26 @@
+.idea
+.ipynb_checkpoints
+.mypy_cache
+.vscode
+__pycache__
+.pytest_cache
+htmlcov
+.coverage*
+coverage.xml
+test.db
+log.txt
+.env
+.env.*
+!.env.example
+!.env.test
+venv
+.venv
+
+# macOS
+.DS_Store
+
+# ruff cache
+ruff_cache/
+.ruff_cache/
+
+data/
