@@ -77,7 +77,7 @@ def test_ws_family_events_forwards_published_frame_to_client(
     ) as ws:
         # Drive a REST write — this publishes to family:{id}:events.
         client.post(
-            "/notes", headers=auth_headers, json={"content": "ws test"}
+            "/api/notes", headers=auth_headers, json={"content": "ws test"}
         )
         frame = ws.receive_json(mode="text")
         # In rare cases a heartbeat could land first; loop past it.

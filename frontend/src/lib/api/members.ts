@@ -38,20 +38,20 @@ export type MemberStatusFilter = "active" | "inactive" | "all";
 
 export const membersApi = {
   list: (status: MemberStatusFilter = "active") =>
-    http<MemberResponse[]>(`/members?status=${status}`),
-  get: (id: string) => http<MemberResponse>(`/members/${id}`),
+    http<MemberResponse[]>(`/api/members?status=${status}`),
+  get: (id: string) => http<MemberResponse>(`/api/members/${id}`),
   create: (body: MemberCreateRequest) =>
-    http<MemberResponse>("/members", {
+    http<MemberResponse>("/api/members", {
       method: "POST",
       body: jsonBody(body),
     }),
   update: (id: string, body: MemberUpdateRequest) =>
-    http<MemberResponse>(`/members/${id}`, {
+    http<MemberResponse>(`/api/members/${id}`, {
       method: "PATCH",
       body: jsonBody(body),
     }),
   setActive: (id: string) =>
-    http<MemberResponse>(`/members/${id}/set-active`, { method: "POST" }),
+    http<MemberResponse>(`/api/members/${id}/set-active`, { method: "POST" }),
   setInactive: (id: string) =>
-    http<MemberResponse>(`/members/${id}/set-inactive`, { method: "POST" }),
+    http<MemberResponse>(`/api/members/${id}/set-inactive`, { method: "POST" }),
 };

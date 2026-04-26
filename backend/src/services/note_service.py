@@ -11,6 +11,8 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from src.core.context import current_actor
+from src.core.family_events import family_event_payload
 from src.models import FamilyPreferences, Note, NoteCar, NoteLabel
 from src.schemas.notes import (
     NoteCreateRequest,
@@ -18,6 +20,7 @@ from src.schemas.notes import (
     NoteResponse,
     NoteUpdateRequest,
 )
+from src.services.chat_streaming import ChatStreamer
 from src.services.label_service import LabelService
 
 SHOPPING_LIST_SLUG = "shopping-list"
@@ -34,11 +37,27 @@ class NoteListFilters:
 
 class NoteService:
     def __init__(
-        self, db: Session, family_id: UUID, label_service: LabelService
+        self,
+        db: Session,
+        family_id: UUID,
+        label_service: LabelService,
+        streamer: ChatStreamer,
     ) -> None:
         self.db = db
         self.family_id = family_id
         self.labels = label_service
+        self.streamer = streamer
+
+    async def _publish(self, *, type: str, note_id: UUID) -> None:
+        await self.streamer.publish_family_event(
+            self.family_id,
+            family_event_payload(
+                type=type,
+                entity="notes",
+                id=note_id,
+                actor=current_actor.get(),
+            ),
+        )
 
     # ---- reads -------------------------------------------------------------
     def list(self, filters: NoteListFilters) -> tuple[list[Note], int]:
@@ -79,7 +98,7 @@ class NoteService:
         return note
 
     # ---- writes ------------------------------------------------------------
-    def create(self, data: NoteCreateRequest) -> Note:
+    async def create(self, data: NoteCreateRequest) -> Note:
         note = Note(
             family_id=self.family_id,
             content=data.content or "",
@@ -95,9 +114,10 @@ class NoteService:
         self._set_cars(note, data.car_ids)
         self.db.commit()
         self.db.refresh(note)
+        await self._publish(type="note.created", note_id=note.id)
         return note
 
-    def update(self, note_id: UUID, data: NoteUpdateRequest) -> Note:
+    async def update(self, note_id: UUID, data: NoteUpdateRequest) -> Note:
         note = self.get(note_id)
         updates = data.model_dump(exclude_unset=True)
 
@@ -112,14 +132,17 @@ class NoteService:
 
         self.db.commit()
         self.db.refresh(note)
+        await self._publish(type="note.updated", note_id=note.id)
         return note
 
-    def delete(self, note_id: UUID) -> None:
+    async def delete(self, note_id: UUID) -> None:
         note = self.get(note_id)
+        deleted_id = note.id
         self.db.delete(note)
         self.db.commit()
+        await self._publish(type="note.deleted", note_id=deleted_id)
 
-    def append_shopping_list(
+    async def append_shopping_list(
         self, line: str, *, auto_create_default: bool
     ) -> Note:
         line = line.strip()
@@ -141,6 +164,7 @@ class NoteService:
                 )
             self.db.commit()
             self.db.refresh(existing)
+            await self._publish(type="note.updated", note_id=existing.id)
             return existing
 
         prefs = (
@@ -160,7 +184,7 @@ class NoteService:
                 },
             )
 
-        return self.create(
+        return await self.create(
             NoteCreateRequest(
                 content=line,
                 pinned=True,

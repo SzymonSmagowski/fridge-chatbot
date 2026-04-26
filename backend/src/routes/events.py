@@ -15,14 +15,12 @@ from sqlalchemy.orm import sessionmaker
 from src.core.cache import cache_aside, family_key, invalidate, sha1_short
 from src.core.dependencies import (
     DeviceContext,
-    get_chat_streamer,
     get_device_context,
     get_event_service,
     get_redis,
     get_session_factory_dep,
     get_settings,
 )
-from src.core.family_events import family_event_payload
 from src.core.settings import Settings
 from src.models import EventTargetSyncStatus
 from src.schemas.events import (
@@ -31,7 +29,6 @@ from src.schemas.events import (
     EventResponse,
     EventUpdateRequest,
 )
-from src.services.chat_streaming import ChatStreamer
 from src.services.event_service import EventListFilters, EventService
 from src.workers.calendar_write_worker import fan_out_event
 
@@ -98,20 +95,15 @@ async def create_event(
     ctx: DeviceContext = Depends(get_device_context),
     events_service: EventService = Depends(get_event_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
     session_factory: sessionmaker = Depends(get_session_factory_dep),
     settings: Settings = Depends(get_settings),
 ):
-    event, _plans = events_service.create(body)
+    event, _plans = await events_service.create(body)
     target_ids = [
         t.id for t in event.targets if t.sync_status == EventTargetSyncStatus.pending
     ]
 
     await _invalidate(redis, ctx.family_id, event.id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="event.created", entity="events", id=event.id),
-    )
 
     if target_ids:
         background_tasks.add_task(
@@ -150,14 +142,9 @@ async def patch_event(
     ctx: DeviceContext = Depends(get_device_context),
     events_service: EventService = Depends(get_event_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    event = events_service.update(event_id, body, scope=scope)
+    event = await events_service.update(event_id, body, scope=scope)
     await _invalidate(redis, ctx.family_id, event_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="event.updated", entity="events", id=event_id),
-    )
     return events_service.to_response(event)
 
 
@@ -168,14 +155,9 @@ async def delete_event(
     ctx: DeviceContext = Depends(get_device_context),
     events_service: EventService = Depends(get_event_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    events_service.delete(event_id, scope=scope)
+    await events_service.delete(event_id, scope=scope)
     await _invalidate(redis, ctx.family_id, event_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="event.deleted", entity="events", id=event_id),
-    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -186,19 +168,14 @@ async def resync_event(
     ctx: DeviceContext = Depends(get_device_context),
     events_service: EventService = Depends(get_event_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
     session_factory: sessionmaker = Depends(get_session_factory_dep),
     settings: Settings = Depends(get_settings),
 ):
-    event = events_service.resync(event_id)
+    event = await events_service.resync(event_id)
     target_ids = [
         t.id for t in event.targets if t.sync_status == EventTargetSyncStatus.pending
     ]
     await _invalidate(redis, ctx.family_id, event_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="event.resynced", entity="events", id=event_id),
-    )
     if target_ids:
         background_tasks.add_task(
             fan_out_event,

@@ -17,12 +17,12 @@ Runs preflight checks for `poetry` and `pnpm`, then starts backend (port 8001) a
 
 ## Backend ↔ Frontend contract
 
-- REST API: `http://localhost:8001` (family, members, cars, notes, events, labels, threads, OAuth)
+- REST API: `http://localhost:8001/api/*` for family-scoped routes (members, cars, notes, events, labels, family, family/preferences, calendar/sync*, pairing). Bare-path routes: `/auth/*`, `/oauth/google/*`, `/threads*`, `/users/me`, `/health`.
 - Streaming chat WS: `ws://localhost:8001/ws/threads/{id}` — first message is JWT auth handshake
 - Family broadcast WS: `ws://localhost:8001/ws/family/{family_id}/events?token=<jwt>` — Redis pub/sub push for board state
-- Auth: JWT bearer token, obtained from `POST /auth/login` (bypass) or `POST /api/pairing/*` (first-time pairing, UI not yet built)
+- Auth: device JWT obtained from `POST /api/pairing/start` (first-time pairing → Google OAuth → callback redirects to `/pair/complete?token=<jwt>`). Legacy `POST /auth/login` is still available as a developer escape hatch.
 
 ## Known gaps
 
-- No first-time pairing UI — falls back to legacy `/login`. Backend `/api/pairing/*` routes exist.
-- Workers (`calendar_sync_worker`, `calendar_write_worker`) and LangGraph tool nodes do not yet emit `family:{id}:events` pub/sub events — only REST handlers do. Two `xfail` backend tests document this.
+- `EventService.scope=all_future` recurring-event split is implemented (Architect §6.7) but lacks UI — calendar editor only exposes `scope=instance` for now.
+- No multi-device pairing UI — schema supports it (`devices` table with `family_id` FK), but the "add another device to this family" flow doesn't exist.

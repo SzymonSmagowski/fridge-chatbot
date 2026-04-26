@@ -31,10 +31,10 @@ Auto-migration: on startup, if `AUTO_MIGRATE=true` (default), the lifespan calls
 
 ```bash
 cd apps/fridge-chatbot/backend
-poetry run pytest              # 151 tests: 149 pass + 2 xfail
+poetry run pytest              # 163 tests, all pass
 ```
 
-xfail tests (Open items #8/#9): workers and LangGraph tool nodes do not yet publish `family:{id}:events` events to Redis — only REST handlers do.
+Coverage: ~86% on `src/services/event_service.py`, 100% on `src/core/context.py`, ~90% across `src/routes/`, `src/services/`, `src/core/`.
 
 ## Domain model
 

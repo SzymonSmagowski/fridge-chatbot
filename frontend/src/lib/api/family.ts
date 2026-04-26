@@ -27,15 +27,16 @@ export type FamilyPreferencesPatch = Partial<
 >;
 
 export const familyApi = {
-  get: () => http<FamilyResponse>("/family"),
+  get: () => http<FamilyResponse>("/api/family"),
   patch: (body: FamilyUpdateRequest) =>
-    http<FamilyResponse>("/family", {
+    http<FamilyResponse>("/api/family", {
       method: "PATCH",
       body: jsonBody(body),
     }),
-  getPreferences: () => http<FamilyPreferencesResponse>("/family/preferences"),
+  getPreferences: () =>
+    http<FamilyPreferencesResponse>("/api/family/preferences"),
   patchPreferences: (body: FamilyPreferencesPatch) =>
-    http<FamilyPreferencesResponse>("/family/preferences", {
+    http<FamilyPreferencesResponse>("/api/family/preferences", {
       method: "PATCH",
       body: jsonBody(body),
     }),

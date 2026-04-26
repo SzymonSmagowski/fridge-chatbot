@@ -17,16 +17,19 @@ export interface LabelUpdateRequest {
 }
 
 export const labelsApi = {
-  list: () => http<LabelResponse[]>("/labels"),
+  list: () => http<LabelResponse[]>("/api/labels"),
   create: (body: LabelCreateRequest) =>
-    http<LabelResponse>("/labels", { method: "POST", body: jsonBody(body) }),
+    http<LabelResponse>("/api/labels", {
+      method: "POST",
+      body: jsonBody(body),
+    }),
   update: (slug: string, body: LabelUpdateRequest) =>
-    http<LabelResponse>(`/labels/${encodeURIComponent(slug)}`, {
+    http<LabelResponse>(`/api/labels/${encodeURIComponent(slug)}`, {
       method: "PATCH",
       body: jsonBody(body),
     }),
   delete: (slug: string) =>
-    http<void>(`/labels/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+    http<void>(`/api/labels/${encodeURIComponent(slug)}`, { method: "DELETE" }),
 };
 
 export const SHOPPING_LIST_SLUG = "shopping-list";

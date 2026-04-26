@@ -7,20 +7,17 @@ from redis.asyncio import Redis
 from src.core.cache import cache_aside, family_key, invalidate
 from src.core.dependencies import (
     DeviceContext,
-    get_chat_streamer,
     get_device_context,
     get_family_preferences_service,
     get_family_service,
     get_redis,
 )
-from src.core.family_events import family_event_payload
 from src.schemas.family import (
     FamilyPreferencesPatch,
     FamilyPreferencesResponse,
     FamilyResponse,
     FamilyUpdate,
 )
-from src.services.chat_streaming import ChatStreamer
 from src.services.family_preferences_service import FamilyPreferencesService
 from src.services.family_service import FamilyService
 
@@ -52,16 +49,9 @@ async def patch_family(
     ctx: DeviceContext = Depends(get_device_context),
     family_service: FamilyService = Depends(get_family_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    family = family_service.update(name=body.name, timezone=body.timezone)
+    family = await family_service.update(name=body.name, timezone=body.timezone)
     await invalidate(redis, family_key(ctx.family_id, "family"))
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(
-            type="family.updated", entity="family", id=ctx.family_id
-        ),
-    )
     return FamilyResponse.model_validate(family)
 
 
@@ -87,16 +77,7 @@ async def patch_preferences(
     ctx: DeviceContext = Depends(get_device_context),
     prefs_service: FamilyPreferencesService = Depends(get_family_preferences_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    prefs = prefs_service.patch(body)
+    prefs = await prefs_service.patch(body)
     await invalidate(redis, family_key(ctx.family_id, "family_preferences"))
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(
-            type="family_preferences.updated",
-            entity="family_preferences",
-            id=ctx.family_id,
-        ),
-    )
     return FamilyPreferencesResponse.model_validate(prefs)

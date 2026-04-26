@@ -29,18 +29,18 @@ export type CarStatusFilter = "active" | "inactive" | "all";
 
 export const carsApi = {
   list: (status: CarStatusFilter = "active") =>
-    http<CarResponse[]>(`/cars?status=${status}`),
+    http<CarResponse[]>(`/api/cars?status=${status}`),
   create: (body: CarCreateRequest) =>
-    http<CarResponse>("/cars", { method: "POST", body: jsonBody(body) }),
+    http<CarResponse>("/api/cars", { method: "POST", body: jsonBody(body) }),
   update: (id: string, body: CarUpdateRequest) =>
-    http<CarResponse>(`/cars/${id}`, {
+    http<CarResponse>(`/api/cars/${id}`, {
       method: "PATCH",
       body: jsonBody(body),
     }),
   setActive: (id: string) =>
-    http<CarResponse>(`/cars/${id}/set-active`, { method: "POST" }),
+    http<CarResponse>(`/api/cars/${id}/set-active`, { method: "POST" }),
   setInactive: (id: string) =>
-    http<CarResponse>(`/cars/${id}/set-inactive`, { method: "POST" }),
+    http<CarResponse>(`/api/cars/${id}/set-inactive`, { method: "POST" }),
   delete: (id: string) =>
-    http<void>(`/cars/${id}`, { method: "DELETE" }),
+    http<void>(`/api/cars/${id}`, { method: "DELETE" }),
 };

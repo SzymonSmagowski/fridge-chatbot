@@ -13,7 +13,7 @@ type PairingState =
   | { kind: "error"; message: string };
 
 /**
- * First-boot kiosk screen. Calls POST /pairing/start (Architect §5.1) and
+ * First-boot kiosk screen. Calls POST /api/pairing/start (Architect §5.1) and
  * redirects the browser to Google's consent URL. Google then redirects to
  * GET /oauth/google/callback?state=pair:<id> on the backend, which completes
  * the pair atomically and 302s back to the frontend with `?token=<jwt>` —

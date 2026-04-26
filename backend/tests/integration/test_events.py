@@ -79,7 +79,7 @@ def test_post_event_with_assignee_creates_one_target_pending(
     start = datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc)
     end = start + timedelta(hours=1)
     resp = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "Soccer practice",
@@ -117,7 +117,7 @@ def test_post_event_with_no_assignee_fans_out_to_all_active_members(
     monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
 
     resp = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "Family dinner",
@@ -145,7 +145,7 @@ def test_post_event_skips_member_without_google_connection(
     monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
 
     resp = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "Soccer",
@@ -171,14 +171,14 @@ def test_post_event_with_car_only_fans_out_to_all_active_members(
     _connect_member_google(db, mom.id)
     _connect_member_google(db, dad.id)
     car = client.post(
-        "/cars", headers=auth_headers, json={"name": "Volvo"}
+        "/api/cars", headers=auth_headers, json={"name": "Volvo"}
     ).json()
 
     from src.routes import events as events_route
     monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
 
     resp = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "Mom takes Volvo",
@@ -207,7 +207,7 @@ def test_post_event_with_empty_title_returns_422(
     client: TestClient, auth_headers
 ) -> None:
     resp = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "",
@@ -226,7 +226,7 @@ def test_post_event_with_empty_title_returns_422(
 def test_get_events_returns_fridge_external_envelope(
     client: TestClient, auth_headers
 ) -> None:
-    resp = client.get("/events", headers=auth_headers)
+    resp = client.get("/api/events", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
     assert "fridge" in body
@@ -243,7 +243,7 @@ def test_get_event_in_other_family_returns_404(
 
     _other_fam, _device, other_token = make_family(family_name="Other")
     other_event = client.post(
-        "/events",
+        "/api/events",
         headers={"Authorization": f"Bearer {other_token}"},
         json={
             "title": "Secret",
@@ -251,7 +251,7 @@ def test_get_event_in_other_family_returns_404(
             "end_at": "2026-05-01T11:00:00+00:00",
         },
     ).json()
-    resp = client.get(f"/events/{other_event['id']}", headers=auth_headers)
+    resp = client.get(f"/api/events/{other_event['id']}", headers=auth_headers)
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "events.not_found"
 
@@ -268,7 +268,7 @@ def test_patch_event_updates_title(
     monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
 
     created = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "Old",
@@ -277,7 +277,7 @@ def test_patch_event_updates_title(
         },
     ).json()
     resp = client.patch(
-        f"/events/{created['id']}",
+        f"/api/events/{created['id']}",
         headers=auth_headers,
         json={"title": "New"},
     )
@@ -292,7 +292,7 @@ def test_delete_event_returns_204(
     monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
 
     created = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "x",
@@ -300,7 +300,7 @@ def test_delete_event_returns_204(
             "end_at": "2026-05-01T11:00:00+00:00",
         },
     ).json()
-    resp = client.delete(f"/events/{created['id']}", headers=auth_headers)
+    resp = client.delete(f"/api/events/{created['id']}", headers=auth_headers)
     assert resp.status_code == 204
     assert db.query(Event).filter(Event.id == UUID(created["id"])).first() is None
 
@@ -317,7 +317,7 @@ def test_resync_event_flips_failed_targets_to_pending(
     monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
 
     created = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "x",
@@ -336,7 +336,7 @@ def test_resync_event_flips_failed_targets_to_pending(
     db.commit()
 
     resp = client.post(
-        f"/events/{created['id']}/resync", headers=auth_headers
+        f"/api/events/{created['id']}/resync", headers=auth_headers
     )
     assert resp.status_code == 200
     target = db.query(EventTarget).filter(
@@ -361,7 +361,7 @@ async def test_post_event_publishes_event_created_frame(
 
     async with family_event_collector(family_id) as collector:
         client.post(
-            "/events",
+            "/api/events",
             headers=auth_headers,
             json={
                 "title": "x",

@@ -16,7 +16,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.orm import sessionmaker
 
 from src.core.cache import family_key, invalidate
-from src.core.pubsub import family_events_channel
+from src.core.family_events import family_event_payload
 from src.core.settings import Settings
 from src.models import (
     CalendarSyncState,
@@ -28,6 +28,7 @@ from src.models import (
     Member,
     MemberStatus,
 )
+from src.services.chat_streaming import ChatStreamer
 from src.services.crypto_service import CryptoService
 from src.services.google_calendar_service import GoogleCalendarService
 from src.services.google_token_service import GoogleTokenService
@@ -155,12 +156,18 @@ async def _pull_member(
     if changed:
         try:
             await invalidate(redis, family_key(family_id, "events:*"))
-            await redis.publish(
-                family_events_channel(family_id),
-                f'{{"type":"external_events.updated","member_id":"{member_id}"}}',
-            )
         except RedisError:
             pass
+        streamer = ChatStreamer(redis)
+        await streamer.publish_family_event(
+            family_id,
+            family_event_payload(
+                type="external_events.updated",
+                entity="events",
+                id=member_id,
+                actor="sync-worker",
+            ),
+        )
 
 
 def _upsert_external_events(

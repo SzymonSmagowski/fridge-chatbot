@@ -8,6 +8,8 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from src.core.context import current_actor
+from src.core.family_events import family_event_payload
 from src.models import GoogleToken, GoogleTokenStatus, Member, MemberStatus
 from src.schemas.members import (
     GoogleState,
@@ -15,14 +17,29 @@ from src.schemas.members import (
     MemberResponse,
     MemberUpdateRequest,
 )
+from src.services.chat_streaming import ChatStreamer
 
 MemberStatusFilter = Literal["active", "inactive", "all"]
 
 
 class MemberService:
-    def __init__(self, db: Session, family_id: UUID) -> None:
+    def __init__(
+        self, db: Session, family_id: UUID, streamer: ChatStreamer
+    ) -> None:
         self.db = db
         self.family_id = family_id
+        self.streamer = streamer
+
+    async def _publish(self, *, type: str, member_id: UUID) -> None:
+        await self.streamer.publish_family_event(
+            self.family_id,
+            family_event_payload(
+                type=type,
+                entity="members",
+                id=member_id,
+                actor=current_actor.get(),
+            ),
+        )
 
     def list(self, status_filter: MemberStatusFilter = "active") -> list[Member]:
         q = self.db.query(Member).filter(Member.family_id == self.family_id)
@@ -45,7 +62,7 @@ class MemberService:
             )
         return member
 
-    def create(self, data: MemberCreateRequest) -> Member:
+    async def create(self, data: MemberCreateRequest) -> Member:
         member = Member(
             family_id=self.family_id,
             name=data.name,
@@ -57,22 +74,30 @@ class MemberService:
         self.db.add(member)
         self.db.commit()
         self.db.refresh(member)
+        await self._publish(type="member.created", member_id=member.id)
         return member
 
-    def update(self, member_id: UUID, data: MemberUpdateRequest) -> Member:
+    async def update(self, member_id: UUID, data: MemberUpdateRequest) -> Member:
         member = self.get(member_id)
         updates = data.model_dump(exclude_unset=True)
         for field, value in updates.items():
             setattr(member, field, value)
         self.db.commit()
         self.db.refresh(member)
+        await self._publish(type="member.updated", member_id=member.id)
         return member
 
-    def set_status(self, member_id: UUID, status: MemberStatus) -> Member:
+    async def set_status(self, member_id: UUID, status: MemberStatus) -> Member:
         member = self.get(member_id)
         member.status = status
         self.db.commit()
         self.db.refresh(member)
+        type_name = (
+            "member.set-active"
+            if status == MemberStatus.active
+            else "member.set-inactive"
+        )
+        await self._publish(type=type_name, member_id=member.id)
         return member
 
     def google_state(self, member: Member) -> GoogleState:

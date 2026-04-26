@@ -36,7 +36,7 @@ afterEach(() => {
 describe("[unit] api/http error envelope handling", () => {
   test("parses { detail, code } from a 4xx response into ApiError", async () => {
     server.use(
-      http.get(`${BACKEND}/notes`, () =>
+      http.get(`${BACKEND}/api/notes`, () =>
         HttpResponse.json(
           { detail: "Note not found", code: "notes.not_found" },
           { status: 404 },
@@ -52,7 +52,7 @@ describe("[unit] api/http error envelope handling", () => {
 
   test("falls back to status text when body isn't JSON", async () => {
     server.use(
-      http.get(`${BACKEND}/notes`, () => new HttpResponse("nope", { status: 500 })),
+      http.get(`${BACKEND}/api/notes`, () => new HttpResponse("nope", { status: 500 })),
     );
 
     await expect(notesApi.list()).rejects.toMatchObject({
@@ -62,7 +62,7 @@ describe("[unit] api/http error envelope handling", () => {
 
   test("429 with retry_after_sec triggers a sonner toast", async () => {
     server.use(
-      http.get(`${BACKEND}/notes`, () =>
+      http.get(`${BACKEND}/api/notes`, () =>
         HttpResponse.json(
           {
             detail: "Too many requests — try again in 30s.",
@@ -82,7 +82,7 @@ describe("[unit] api/http error envelope handling", () => {
 
   test("DELETE returning 204 resolves to undefined", async () => {
     server.use(
-      http.delete(`${BACKEND}/notes/n-1`, () => new HttpResponse(null, { status: 204 })),
+      http.delete(`${BACKEND}/api/notes/n-1`, () => new HttpResponse(null, { status: 204 })),
     );
 
     await expect(notesApi.delete("n-1")).resolves.toBeUndefined();
@@ -91,7 +91,7 @@ describe("[unit] api/http error envelope handling", () => {
   test("attaches Authorization header when a token is set", async () => {
     let captured: string | null = null;
     server.use(
-      http.get(`${BACKEND}/notes`, ({ request }) => {
+      http.get(`${BACKEND}/api/notes`, ({ request }) => {
         captured = request.headers.get("Authorization");
         return HttpResponse.json({ items: [], total: 0 });
       }),

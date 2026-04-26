@@ -1,6 +1,6 @@
 /**
  * Integration tests for PairingScreen — covers the redirect-based pairing
- * flow against Architect §5.1 (`POST /pairing/start` returns
+ * flow against Architect §5.1 (`POST /api/pairing/start` returns
  * `{ authorize_url, pairing_id }`, then the kiosk navigates to that URL).
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -39,10 +39,10 @@ describe("[integration] PairingScreen", () => {
     expect(screen.getByRole("button", { name: /start pairing/i })).toBeEnabled();
   });
 
-  test("starting → redirecting: POSTs /pairing/start and assigns to authorize_url", async () => {
+  test("starting → redirecting: POSTs /api/pairing/start and assigns to authorize_url", async () => {
     let captured: { device_label?: string } | null = null;
     server.use(
-      http.post(`${BACKEND}/pairing/start`, async ({ request }) => {
+      http.post(`${BACKEND}/api/pairing/start`, async ({ request }) => {
         captured = (await request.json()) as { device_label?: string };
         return HttpResponse.json({
           pairing_id: "abc123",
@@ -60,9 +60,9 @@ describe("[integration] PairingScreen", () => {
     expect(captured).toEqual({ device_label: "Kitchen Fridge" });
   });
 
-  test("error: 503 from /pairing/start surfaces an error box and a retry button", async () => {
+  test("error: 503 from /api/pairing/start surfaces an error box and a retry button", async () => {
     server.use(
-      http.post(`${BACKEND}/pairing/start`, () =>
+      http.post(`${BACKEND}/api/pairing/start`, () =>
         HttpResponse.json(
           { detail: "Pairing temporarily unavailable" },
           { status: 503 },
@@ -84,7 +84,7 @@ describe("[integration] PairingScreen", () => {
   test("error → retry: clicking retry re-issues the request and redirects on success", async () => {
     let calls = 0;
     server.use(
-      http.post(`${BACKEND}/pairing/start`, () => {
+      http.post(`${BACKEND}/api/pairing/start`, () => {
         calls += 1;
         if (calls === 1) {
           return HttpResponse.json({ detail: "boom" }, { status: 503 });

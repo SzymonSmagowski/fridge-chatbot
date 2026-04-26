@@ -57,22 +57,22 @@ function qs(filters: NoteListFilters): string {
 
 export const notesApi = {
   list: (filters: NoteListFilters = {}) =>
-    http<NoteListResponse>(`/notes${qs(filters)}`),
-  get: (id: string) => http<NoteResponse>(`/notes/${id}`),
+    http<NoteListResponse>(`/api/notes${qs(filters)}`),
+  get: (id: string) => http<NoteResponse>(`/api/notes/${id}`),
   create: (body: NoteCreateRequest) =>
-    http<NoteResponse>("/notes", {
+    http<NoteResponse>("/api/notes", {
       method: "POST",
       body: jsonBody(body),
     }),
   update: (id: string, body: NoteUpdateRequest) =>
-    http<NoteResponse>(`/notes/${id}`, {
+    http<NoteResponse>(`/api/notes/${id}`, {
       method: "PATCH",
       body: jsonBody(body),
     }),
   delete: (id: string) =>
-    http<void>(`/notes/${id}`, { method: "DELETE" }),
+    http<void>(`/api/notes/${id}`, { method: "DELETE" }),
   appendShoppingList: (line: string) =>
-    http<NoteResponse>("/notes/shopping-list/append", {
+    http<NoteResponse>("/api/notes/shopping-list/append", {
       method: "POST",
       body: jsonBody({ line }),
     }),

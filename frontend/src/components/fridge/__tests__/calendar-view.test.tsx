@@ -66,10 +66,10 @@ describe("[integration] CalendarView", () => {
 
   test("error: API failure renders error banner with retry", async () => {
     server.use(
-      http.get(`${BACKEND}/events`, () =>
+      http.get(`${BACKEND}/api/events`, () =>
         HttpResponse.json({ detail: "boom" }, { status: 500 }),
       ),
-      http.get(`${BACKEND}/calendar/sync-state`, () => HttpResponse.json([])),
+      http.get(`${BACKEND}/api/calendar/sync-state`, () => HttpResponse.json([])),
     );
     render(<CalendarView members={FIXTURE_MEMBERS} cars={FIXTURE_CARS} />);
     await waitFor(() => {
@@ -81,7 +81,7 @@ describe("[integration] CalendarView", () => {
     let posted: { title: string; assignee_member_id: string | null; car_ids: string[] } | null = null;
     server.use(...successHandlers({ events: [] }));
     server.use(
-      http.post(`${BACKEND}/events`, async ({ request }) => {
+      http.post(`${BACKEND}/api/events`, async ({ request }) => {
         posted = (await request.json()) as typeof posted;
         return HttpResponse.json(
           {

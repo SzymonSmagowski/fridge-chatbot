@@ -82,7 +82,7 @@ def stubbed_fan_out(monkeypatch):
 def test_contract_pairing_start_response_matches_schema(
     client: TestClient, stubbed_oauth
 ) -> None:
-    resp = client.post("/pairing/start", json={"device_label": "Kitchen"})
+    resp = client.post("/api/pairing/start", json={"device_label": "Kitchen"})
     PairingStartResponse.model_validate(resp.json())
 
 
@@ -105,12 +105,12 @@ def test_contract_oauth_authorize_response_matches_schema(
 
 
 def test_contract_family_get_matches_schema(client: TestClient, auth_headers) -> None:
-    resp = client.get("/family", headers=auth_headers)
+    resp = client.get("/api/family", headers=auth_headers)
     FamilyResponse.model_validate(resp.json())
 
 
 def test_contract_family_patch_matches_schema(client: TestClient, auth_headers) -> None:
-    resp = client.patch("/family", headers=auth_headers, json={"name": "X"})
+    resp = client.patch("/api/family", headers=auth_headers, json={"name": "X"})
     FamilyResponse.model_validate(resp.json())
 
 
@@ -123,7 +123,7 @@ def test_contract_members_create_matches_schema(
     client: TestClient, auth_headers
 ) -> None:
     resp = client.post(
-        "/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
+        "/api/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
     )
     body = resp.json()
     MemberResponse.model_validate(body)
@@ -131,8 +131,8 @@ def test_contract_members_create_matches_schema(
 
 
 def test_contract_members_list_matches_schema(client: TestClient, auth_headers) -> None:
-    client.post("/members", headers=auth_headers, json={"name": "Ola", "color": "sage"})
-    resp = client.get("/members", headers=auth_headers)
+    client.post("/api/members", headers=auth_headers, json={"name": "Ola", "color": "sage"})
+    resp = client.get("/api/members", headers=auth_headers)
     for item in resp.json():
         MemberResponse.model_validate(item)
 
@@ -141,9 +141,9 @@ def test_contract_member_detail_matches_schema(
     client: TestClient, auth_headers
 ) -> None:
     created = client.post(
-        "/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
+        "/api/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
     ).json()
-    resp = client.get(f"/members/{created['id']}", headers=auth_headers)
+    resp = client.get(f"/api/members/{created['id']}", headers=auth_headers)
     MemberResponse.model_validate(resp.json())
 
 
@@ -151,9 +151,9 @@ def test_contract_set_inactive_matches_schema(
     client: TestClient, auth_headers
 ) -> None:
     created = client.post(
-        "/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
+        "/api/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
     ).json()
-    resp = client.post(f"/members/{created['id']}/set-inactive", headers=auth_headers)
+    resp = client.post(f"/api/members/{created['id']}/set-inactive", headers=auth_headers)
     MemberResponse.model_validate(resp.json())
     assert resp.json()["status"] == "inactive"
 
@@ -164,13 +164,13 @@ def test_contract_set_inactive_matches_schema(
 
 
 def test_contract_cars_create_matches_schema(client: TestClient, auth_headers) -> None:
-    resp = client.post("/cars", headers=auth_headers, json={"name": "Civic"})
+    resp = client.post("/api/cars", headers=auth_headers, json={"name": "Civic"})
     CarResponse.model_validate(resp.json())
 
 
 def test_contract_cars_list_matches_schema(client: TestClient, auth_headers) -> None:
-    client.post("/cars", headers=auth_headers, json={"name": "Civic"})
-    for item in client.get("/cars", headers=auth_headers).json():
+    client.post("/api/cars", headers=auth_headers, json={"name": "Civic"})
+    for item in client.get("/api/cars", headers=auth_headers).json():
         CarResponse.model_validate(item)
 
 
@@ -181,7 +181,7 @@ def test_contract_cars_list_matches_schema(client: TestClient, auth_headers) -> 
 
 def test_contract_notes_create_matches_schema(client: TestClient, auth_headers) -> None:
     resp = client.post(
-        "/notes",
+        "/api/notes",
         headers=auth_headers,
         json={"content": "test", "label_slugs": ["reminder"]},
     )
@@ -189,17 +189,17 @@ def test_contract_notes_create_matches_schema(client: TestClient, auth_headers) 
 
 
 def test_contract_notes_list_matches_schema(client: TestClient, auth_headers) -> None:
-    client.post("/notes", headers=auth_headers, json={"content": "x"})
-    NoteListResponse.model_validate(client.get("/notes", headers=auth_headers).json())
+    client.post("/api/notes", headers=auth_headers, json={"content": "x"})
+    NoteListResponse.model_validate(client.get("/api/notes", headers=auth_headers).json())
 
 
 def test_contract_note_detail_matches_schema(
     client: TestClient, auth_headers
 ) -> None:
     created = client.post(
-        "/notes", headers=auth_headers, json={"content": "x"}
+        "/api/notes", headers=auth_headers, json={"content": "x"}
     ).json()
-    resp = client.get(f"/notes/{created['id']}", headers=auth_headers)
+    resp = client.get(f"/api/notes/{created['id']}", headers=auth_headers)
     NoteResponse.model_validate(resp.json())
 
 
@@ -207,7 +207,7 @@ def test_contract_shopping_list_append_matches_schema(
     client: TestClient, auth_headers
 ) -> None:
     resp = client.post(
-        "/notes/shopping-list/append",
+        "/api/notes/shopping-list/append",
         headers=auth_headers,
         json={"line": "milk"},
     )
@@ -223,16 +223,16 @@ def test_contract_labels_create_matches_schema(
     client: TestClient, auth_headers
 ) -> None:
     resp = client.post(
-        "/labels", headers=auth_headers, json={"slug": "todo", "display_name": "Todo"}
+        "/api/labels", headers=auth_headers, json={"slug": "todo", "display_name": "Todo"}
     )
     LabelResponse.model_validate(resp.json())
 
 
 def test_contract_labels_list_matches_schema(client: TestClient, auth_headers) -> None:
     client.post(
-        "/labels", headers=auth_headers, json={"slug": "todo", "display_name": "Todo"}
+        "/api/labels", headers=auth_headers, json={"slug": "todo", "display_name": "Todo"}
     )
-    for item in client.get("/labels", headers=auth_headers).json():
+    for item in client.get("/api/labels", headers=auth_headers).json():
         LabelResponse.model_validate(item)
 
 
@@ -245,7 +245,7 @@ def test_contract_events_create_matches_schema(
     client: TestClient, auth_headers, stubbed_fan_out
 ) -> None:
     resp = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "x",
@@ -263,7 +263,7 @@ def test_contract_events_list_matches_schema(
     client: TestClient, auth_headers, stubbed_fan_out
 ) -> None:
     client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "x",
@@ -272,7 +272,7 @@ def test_contract_events_list_matches_schema(
         },
     )
     EventListResponse.model_validate(
-        client.get("/events", headers=auth_headers).json()
+        client.get("/api/events", headers=auth_headers).json()
     )
 
 
@@ -280,7 +280,7 @@ def test_contract_event_detail_matches_schema(
     client: TestClient, auth_headers, stubbed_fan_out
 ) -> None:
     created = client.post(
-        "/events",
+        "/api/events",
         headers=auth_headers,
         json={
             "title": "x",
@@ -288,7 +288,7 @@ def test_contract_event_detail_matches_schema(
             "end_at": "2026-05-01T11:00:00+00:00",
         },
     ).json()
-    resp = client.get(f"/events/{created['id']}", headers=auth_headers)
+    resp = client.get(f"/api/events/{created['id']}", headers=auth_headers)
     EventResponse.model_validate(resp.json())
 
 
@@ -300,7 +300,7 @@ def test_contract_event_detail_matches_schema(
 def test_contract_family_preferences_get_matches_schema(
     client: TestClient, auth_headers
 ) -> None:
-    resp = client.get("/family/preferences", headers=auth_headers)
+    resp = client.get("/api/family/preferences", headers=auth_headers)
     FamilyPreferencesResponse.model_validate(resp.json())
 
 
@@ -308,7 +308,7 @@ def test_contract_family_preferences_patch_matches_schema(
     client: TestClient, auth_headers
 ) -> None:
     resp = client.patch(
-        "/family/preferences",
+        "/api/family/preferences",
         headers=auth_headers,
         json={"sync_interval_sec": 600},
     )
@@ -326,7 +326,7 @@ def test_contract_calendar_sync_state_matches_schema(
     family_id, _, _ = family
     db.add(Member(family_id=family_id, name="Mom", color="rose"))
     db.commit()
-    for row in client.get("/calendar/sync-state", headers=auth_headers).json():
+    for row in client.get("/api/calendar/sync-state", headers=auth_headers).json():
         SyncStateResponse.model_validate(row)
 
 
@@ -362,9 +362,9 @@ def test_contract_rate_limit_envelope_exact_shape(client: TestClient) -> None:
 @pytest.mark.parametrize(
     "path,code",
     [
-        ("/members/{id}", "members.not_found"),
-        ("/notes/{id}", "notes.not_found"),
-        ("/events/{id}", "events.not_found"),
+        ("/api/members/{id}", "members.not_found"),
+        ("/api/notes/{id}", "notes.not_found"),
+        ("/api/events/{id}", "events.not_found"),
     ],
 )
 def test_contract_random_uuid_returns_404_with_typed_code(

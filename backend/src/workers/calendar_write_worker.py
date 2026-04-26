@@ -14,8 +14,9 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.orm import sessionmaker
 
-from src.core.pubsub import family_events_channel
+from src.core.family_events import family_event_payload
 from src.models import Event, EventTarget, EventTargetSyncStatus
+from src.services.chat_streaming import ChatStreamer
 from src.services.crypto_service import CryptoService
 from src.services.google_calendar_service import GoogleCalendarService
 from src.services.google_token_service import GoogleTokenService
@@ -51,13 +52,20 @@ async def fan_out_event(
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    try:
-        await redis.publish(
-            family_events_channel(_family_id_for_event(session_factory, event_id)),
-            f'{{"type":"event.synced","id":"{event_id}"}}',
-        )
-    except RedisError as exc:
-        logger.warning("publish event.synced failed: %s", exc)
+    family_id = _family_id_for_event(session_factory, event_id)
+    if not family_id:
+        return
+
+    streamer = ChatStreamer(redis)
+    await streamer.publish_family_event(
+        family_id,
+        family_event_payload(
+            type="event.synced",
+            entity="events",
+            id=event_id,
+            actor="sync-worker",
+        ),
+    )
 
 
 def _family_id_for_event(session_factory: sessionmaker, event_id: UUID) -> str:

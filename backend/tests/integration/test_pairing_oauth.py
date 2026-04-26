@@ -64,7 +64,7 @@ def oauth_stub(app):
 def test_pairing_start_returns_authorize_url_and_pairing_id(
     client: TestClient, oauth_stub
 ) -> None:
-    resp = client.post("/pairing/start", json={"device_label": "Kitchen"})
+    resp = client.post("/api/pairing/start", json={"device_label": "Kitchen"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["pairing_id"]
@@ -82,7 +82,7 @@ def test_pair_callback_creates_family_device_member_and_sets_token(
 ) -> None:
     """D9: pairing transaction seeds family + family_preferences + device +
     first member + reserved labels + auto shopping-list note + Google token."""
-    start = client.post("/pairing/start", json={"device_label": "Kitchen"}).json()
+    start = client.post("/api/pairing/start", json={"device_label": "Kitchen"}).json()
     pairing_id = start["pairing_id"]
 
     resp = client.get(
@@ -91,9 +91,11 @@ def test_pair_callback_creates_family_device_member_and_sets_token(
         follow_redirects=False,
     )
     assert resp.status_code == 302
-    assert "/settings?paired=1&token=" in resp.headers["location"]
-    # Cookie contains the device JWT.
-    assert "fridge_device_token" in resp.cookies
+    # A1: callback now redirects to /pair/complete?token=<jwt> (architecture §5.1).
+    # The cookie path was removed — the SPA grabs the token from the query string
+    # and persists it to localStorage itself.
+    assert resp.headers["location"].startswith("/pair/complete?token=")
+    assert "fridge_device_token" not in resp.cookies
 
     family = db.query(Family).first()
     assert family is not None
@@ -160,7 +162,7 @@ def test_pair_callback_without_refresh_token_returns_400(
             return data
 
     app.dependency_overrides[deps.get_google_oauth_service] = lambda: _NoRefreshStub()
-    start = client.post("/pairing/start", json={"device_label": "Kitchen"}).json()
+    start = client.post("/api/pairing/start", json={"device_label": "Kitchen"}).json()
     resp = client.get(
         "/oauth/google/callback",
         params={"code": "fake", "state": f"pair:{start['pairing_id']}"},
@@ -195,3 +197,44 @@ def test_oauth_authorize_for_member_returns_authorize_url(
     )
     assert resp.status_code == 200
     assert "state=connect:" in resp.json()["authorize_url"]
+
+
+# ---------------------------------------------------------------------------
+# A1 — contract: pair callback redirects to /pair/complete?token=<jwt>, NOT
+# the legacy /settings?paired=1&token= target. The frontend Pairing page reads
+# the token from the query string and persists it; drift here breaks the SPA.
+# ---------------------------------------------------------------------------
+
+
+def test_pair_callback_redirect_location_targets_pair_complete_with_token(
+    client: TestClient, db, oauth_stub
+) -> None:
+    """A1 contract: 302 Location must be `/pair/complete?token=<jwt>` and the
+    token must decode as a device-scoped JWT."""
+    import jwt
+
+    from src.core.dependencies import get_settings
+
+    start = client.post(
+        "/api/pairing/start", json={"device_label": "Kitchen"}
+    ).json()
+    resp = client.get(
+        "/oauth/google/callback",
+        params={"code": "fake-code", "state": f"pair:{start['pairing_id']}"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert location.startswith("/pair/complete?token=")
+    # The token must be present and decode against our JWT secret with typ=device.
+    token = location.split("token=", 1)[1]
+    assert token, "Location header had no JWT after token="
+    settings = get_settings()
+    payload = jwt.decode(
+        token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+    )
+    assert payload["typ"] == "device"
+    assert payload.get("family_id")
+    assert payload.get("sub")
+    # The legacy cookie path is gone — must NOT be set.
+    assert "fridge_device_token" not in resp.cookies

@@ -7,18 +7,15 @@ from redis.asyncio import Redis
 from src.core.cache import cache_aside, family_key, invalidate
 from src.core.dependencies import (
     DeviceContext,
-    get_chat_streamer,
     get_device_context,
     get_label_service,
     get_redis,
 )
-from src.core.family_events import family_event_payload
 from src.schemas.labels import (
     LabelCreateRequest,
     LabelResponse,
     LabelUpdateRequest,
 )
-from src.services.chat_streaming import ChatStreamer
 from src.services.label_service import LabelReservedError, LabelService
 
 router = APIRouter(prefix="/labels", tags=["labels"])
@@ -60,14 +57,9 @@ async def create_label(
     ctx: DeviceContext = Depends(get_device_context),
     labels_service: LabelService = Depends(get_label_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    label = labels_service.create(body.slug, body.display_name)
+    label = await labels_service.create(body.slug, body.display_name)
     await _invalidate(redis, ctx.family_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="label.created", entity="labels", id=label.slug),
-    )
     return labels_service.to_response(label)
 
 
@@ -78,14 +70,9 @@ async def patch_label(
     ctx: DeviceContext = Depends(get_device_context),
     labels_service: LabelService = Depends(get_label_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    label = labels_service.update(slug, body.display_name)
+    label = await labels_service.update(slug, body.display_name)
     await _invalidate(redis, ctx.family_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="label.updated", entity="labels", id=label.slug),
-    )
     return labels_service.to_response(label)
 
 
@@ -95,10 +82,9 @@ async def delete_label(
     ctx: DeviceContext = Depends(get_device_context),
     labels_service: LabelService = Depends(get_label_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
     try:
-        labels_service.delete(slug)
+        await labels_service.delete(slug)
     except LabelReservedError as exc:
         raise HTTPException(
             status_code=409,
@@ -108,8 +94,4 @@ async def delete_label(
             },
         ) from exc
     await _invalidate(redis, ctx.family_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="label.deleted", entity="labels", id=slug),
-    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -77,20 +77,20 @@ function qs(filters: EventListFilters): string {
 
 export const eventsApi = {
   list: (filters: EventListFilters = {}) =>
-    http<EventListResponse>(`/events${qs(filters)}`),
-  get: (id: string) => http<EventResponse>(`/events/${id}`),
+    http<EventListResponse>(`/api/events${qs(filters)}`),
+  get: (id: string) => http<EventResponse>(`/api/events/${id}`),
   create: (body: EventCreateRequest) =>
-    http<EventResponse>("/events", {
+    http<EventResponse>("/api/events", {
       method: "POST",
       body: jsonBody(body),
     }),
   update: (id: string, body: EventUpdateRequest, scope: EventScope = "instance") =>
-    http<EventResponse>(`/events/${id}?scope=${scope}`, {
+    http<EventResponse>(`/api/events/${id}?scope=${scope}`, {
       method: "PATCH",
       body: jsonBody(body),
     }),
   delete: (id: string, scope: EventScope = "instance") =>
-    http<void>(`/events/${id}?scope=${scope}`, { method: "DELETE" }),
+    http<void>(`/api/events/${id}?scope=${scope}`, { method: "DELETE" }),
   resync: (id: string) =>
-    http<EventResponse>(`/events/${id}/resync`, { method: "POST" }),
+    http<EventResponse>(`/api/events/${id}/resync`, { method: "POST" }),
 };

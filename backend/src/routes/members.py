@@ -10,19 +10,16 @@ from redis.asyncio import Redis
 from src.core.cache import cache_aside, family_key, invalidate, sha1_short
 from src.core.dependencies import (
     DeviceContext,
-    get_chat_streamer,
     get_device_context,
     get_member_service,
     get_redis,
 )
-from src.core.family_events import family_event_payload
 from src.models import MemberStatus
 from src.schemas.members import (
     MemberCreateRequest,
     MemberResponse,
     MemberUpdateRequest,
 )
-from src.services.chat_streaming import ChatStreamer
 from src.services.member_service import MemberService
 
 router = APIRouter(prefix="/members", tags=["members"])
@@ -72,14 +69,9 @@ async def create_member(
     ctx: DeviceContext = Depends(get_device_context),
     members_service: MemberService = Depends(get_member_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    member = members_service.create(body)
+    member = await members_service.create(body)
     await _invalidate(redis, ctx.family_id, member.id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="member.created", entity="members", id=member.id),
-    )
     return members_service.to_response(member)
 
 
@@ -107,14 +99,9 @@ async def patch_member(
     ctx: DeviceContext = Depends(get_device_context),
     members_service: MemberService = Depends(get_member_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    member = members_service.update(member_id, body)
+    member = await members_service.update(member_id, body)
     await _invalidate(redis, ctx.family_id, member_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="member.updated", entity="members", id=member_id),
-    )
     return members_service.to_response(member)
 
 
@@ -124,14 +111,9 @@ async def set_inactive(
     ctx: DeviceContext = Depends(get_device_context),
     members_service: MemberService = Depends(get_member_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    member = members_service.set_status(member_id, MemberStatus.inactive)
+    member = await members_service.set_status(member_id, MemberStatus.inactive)
     await _invalidate(redis, ctx.family_id, member_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="member.updated", entity="members", id=member_id),
-    )
     return members_service.to_response(member)
 
 
@@ -141,12 +123,7 @@ async def set_active(
     ctx: DeviceContext = Depends(get_device_context),
     members_service: MemberService = Depends(get_member_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    member = members_service.set_status(member_id, MemberStatus.active)
+    member = await members_service.set_status(member_id, MemberStatus.active)
     await _invalidate(redis, ctx.family_id, member_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="member.updated", entity="members", id=member_id),
-    )
     return members_service.to_response(member)

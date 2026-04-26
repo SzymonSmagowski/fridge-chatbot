@@ -10,13 +10,11 @@ from redis.asyncio import Redis
 from src.core.cache import cache_aside, family_key, invalidate, sha1_short
 from src.core.dependencies import (
     DeviceContext,
-    get_chat_streamer,
     get_device_context,
     get_note_service,
     get_redis,
     get_settings,
 )
-from src.core.family_events import family_event_payload
 from src.core.settings import Settings
 from src.schemas.notes import (
     NoteCreateRequest,
@@ -25,7 +23,6 @@ from src.schemas.notes import (
     NoteUpdateRequest,
     ShoppingListAppendRequest,
 )
-from src.services.chat_streaming import ChatStreamer
 from src.services.note_service import NoteListFilters, NoteService
 
 router = APIRouter(prefix="/notes", tags=["notes"])
@@ -93,14 +90,9 @@ async def create_note(
     ctx: DeviceContext = Depends(get_device_context),
     notes: NoteService = Depends(get_note_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    note = notes.create(body)
+    note = await notes.create(body)
     await _invalidate(redis, ctx.family_id, note.id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="note.created", entity="notes", id=note.id),
-    )
     return notes.to_response(note)
 
 
@@ -128,14 +120,9 @@ async def patch_note(
     ctx: DeviceContext = Depends(get_device_context),
     notes: NoteService = Depends(get_note_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    note = notes.update(note_id, body)
+    note = await notes.update(note_id, body)
     await _invalidate(redis, ctx.family_id, note_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="note.updated", entity="notes", id=note_id),
-    )
     return notes.to_response(note)
 
 
@@ -145,14 +132,9 @@ async def delete_note(
     ctx: DeviceContext = Depends(get_device_context),
     notes: NoteService = Depends(get_note_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    notes.delete(note_id)
+    await notes.delete(note_id)
     await _invalidate(redis, ctx.family_id, note_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="note.deleted", entity="notes", id=note_id),
-    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -162,17 +144,10 @@ async def append_shopping_list(
     ctx: DeviceContext = Depends(get_device_context),
     notes: NoteService = Depends(get_note_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
     settings: Settings = Depends(get_settings),
 ):
-    note = notes.append_shopping_list(
+    note = await notes.append_shopping_list(
         body.line, auto_create_default=settings.AUTO_CREATE_SHOPPING_LIST_DEFAULT
     )
     await _invalidate(redis, ctx.family_id, note.id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(
-            type="note.shopping_list.appended", entity="notes", id=note.id
-        ),
-    )
     return notes.to_response(note)

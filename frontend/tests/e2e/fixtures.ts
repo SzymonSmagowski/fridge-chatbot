@@ -132,17 +132,19 @@ export async function mockBackend(page: Page, overrides: {
   await page.route(`${API}/users/me`, (r) =>
     r.fulfill({ json: USER_ME, status: 200 }),
   );
-  await page.route(`${API}/family`, (r) => r.fulfill({ json: FAMILY }));
-  await page.route(`${API}/family/preferences`, (r) => r.fulfill({ json: PREFS }));
+  await page.route(`${API}/api/family`, (r) => r.fulfill({ json: FAMILY }));
+  await page.route(`${API}/api/family/preferences`, (r) =>
+    r.fulfill({ json: PREFS }),
+  );
 
-  await page.route(new RegExp(`${API}/members(\\?.*)?$`), (r) =>
+  await page.route(new RegExp(`${API}/api/members(\\?.*)?$`), (r) =>
     r.fulfill({ json: members }),
   );
-  await page.route(new RegExp(`${API}/cars(\\?.*)?$`), (r) =>
+  await page.route(new RegExp(`${API}/api/cars(\\?.*)?$`), (r) =>
     r.fulfill({ json: cars }),
   );
 
-  await page.route(new RegExp(`${API}/notes(\\?.*)?$`), async (route) => {
+  await page.route(new RegExp(`${API}/api/notes(\\?.*)?$`), async (route) => {
     const req = route.request();
     if (req.method() === "POST") {
       const body = req.postDataJSON() as { content: string; assignee_member_id: string | null };
@@ -168,7 +170,7 @@ export async function mockBackend(page: Page, overrides: {
     await route.fulfill({ json: { items: notes, total: notes.length } });
   });
 
-  await page.route(new RegExp(`${API}/notes/[^/]+/?$`), async (route) => {
+  await page.route(new RegExp(`${API}/api/notes/[^/]+/?$`), async (route) => {
     const req = route.request();
     if (req.method() === "DELETE") return route.fulfill({ status: 204 });
     if (req.method() === "PATCH") {
@@ -180,7 +182,7 @@ export async function mockBackend(page: Page, overrides: {
     return route.fallback();
   });
 
-  await page.route(new RegExp(`${API}/events(\\?.*)?$`), async (route) => {
+  await page.route(new RegExp(`${API}/api/events(\\?.*)?$`), async (route) => {
     const req = route.request();
     if (req.method() === "POST") {
       const body = req.postDataJSON() as { title: string };
@@ -211,7 +213,9 @@ export async function mockBackend(page: Page, overrides: {
     return route.fulfill({ json: { items: [], total: 0 } });
   });
 
-  await page.route(`${API}/calendar/sync-state`, (r) => r.fulfill({ json: [] }));
+  await page.route(`${API}/api/calendar/sync-state`, (r) =>
+    r.fulfill({ json: [] }),
+  );
   await page.route(`${API}/threads`, (r) => r.fulfill({ json: [] }));
   await page.route(new RegExp(`${API}/auth/login$`), (r) =>
     r.fulfill({

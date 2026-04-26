@@ -8,6 +8,8 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from src.core.context import current_actor
+from src.core.family_events import family_event_payload
 from src.core.labels import (
     RESERVED_DISPLAY_NAMES,
     RESERVED_SLUGS,
@@ -17,6 +19,7 @@ from src.core.labels import (
 )
 from src.models import Label, NoteLabel
 from src.schemas.labels import LabelResponse
+from src.services.chat_streaming import ChatStreamer
 
 
 class LabelReservedError(Exception):
@@ -24,9 +27,23 @@ class LabelReservedError(Exception):
 
 
 class LabelService:
-    def __init__(self, db: Session, family_id: UUID) -> None:
+    def __init__(
+        self, db: Session, family_id: UUID, streamer: ChatStreamer
+    ) -> None:
         self.db = db
         self.family_id = family_id
+        self.streamer = streamer
+
+    async def _publish(self, *, type: str, slug: str) -> None:
+        await self.streamer.publish_family_event(
+            self.family_id,
+            family_event_payload(
+                type=type,
+                entity="labels",
+                id=slug,
+                actor=current_actor.get(),
+            ),
+        )
 
     def list(self) -> list[Label]:
         return (
@@ -49,7 +66,7 @@ class LabelService:
             )
         return label
 
-    def create(self, slug: str, display_name: str) -> Label:
+    async def create(self, slug: str, display_name: str) -> Label:
         slug = normalize_slug(slug)
         if not slug:
             raise HTTPException(
@@ -69,21 +86,25 @@ class LabelService:
         self.db.add(label)
         self.db.commit()
         self.db.refresh(label)
+        await self._publish(type="label.created", slug=label.slug)
         return label
 
-    def update(self, slug: str, display_name: str) -> Label:
+    async def update(self, slug: str, display_name: str) -> Label:
         label = self.get(slug)
         label.display_name = display_name.strip()
         self.db.commit()
         self.db.refresh(label)
+        await self._publish(type="label.updated", slug=label.slug)
         return label
 
-    def delete(self, slug: str) -> None:
+    async def delete(self, slug: str) -> None:
         if is_reserved(slug):
             raise LabelReservedError(slug)
         label = self.get(slug)
+        deleted_slug = label.slug
         self.db.delete(label)
         self.db.commit()
+        await self._publish(type="label.deleted", slug=deleted_slug)
 
     def upsert_for_slugs(self, raw_slugs: list[str]) -> list[Label]:
         """Normalize input slugs, ensure every one exists in `labels`, return them.

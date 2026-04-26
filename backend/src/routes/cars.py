@@ -11,15 +11,12 @@ from src.core.cache import cache_aside, family_key, invalidate, sha1_short
 from src.core.dependencies import (
     DeviceContext,
     get_car_service,
-    get_chat_streamer,
     get_device_context,
     get_redis,
 )
-from src.core.family_events import family_event_payload
 from src.models import CarStatus
 from src.schemas.cars import CarCreateRequest, CarResponse, CarUpdateRequest
 from src.services.car_service import CarService
-from src.services.chat_streaming import ChatStreamer
 
 router = APIRouter(prefix="/cars", tags=["cars"])
 
@@ -71,14 +68,9 @@ async def create_car(
     ctx: DeviceContext = Depends(get_device_context),
     cars_service: CarService = Depends(get_car_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    car = cars_service.create(body)
+    car = await cars_service.create(body)
     await _invalidate(redis, ctx.family_id, car.id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="car.created", entity="cars", id=car.id),
-    )
     return CarResponse.model_validate(car)
 
 
@@ -89,14 +81,9 @@ async def patch_car(
     ctx: DeviceContext = Depends(get_device_context),
     cars_service: CarService = Depends(get_car_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    car = cars_service.update(car_id, body)
+    car = await cars_service.update(car_id, body)
     await _invalidate(redis, ctx.family_id, car_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="car.updated", entity="cars", id=car_id),
-    )
     return CarResponse.model_validate(car)
 
 
@@ -106,14 +93,9 @@ async def set_inactive(
     ctx: DeviceContext = Depends(get_device_context),
     cars_service: CarService = Depends(get_car_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    car = cars_service.set_status(car_id, CarStatus.inactive)
+    car = await cars_service.set_status(car_id, CarStatus.inactive)
     await _invalidate(redis, ctx.family_id, car_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="car.updated", entity="cars", id=car_id),
-    )
     return CarResponse.model_validate(car)
 
 
@@ -123,14 +105,9 @@ async def set_active(
     ctx: DeviceContext = Depends(get_device_context),
     cars_service: CarService = Depends(get_car_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    car = cars_service.set_status(car_id, CarStatus.active)
+    car = await cars_service.set_status(car_id, CarStatus.active)
     await _invalidate(redis, ctx.family_id, car_id)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="car.updated", entity="cars", id=car_id),
-    )
     return CarResponse.model_validate(car)
 
 
@@ -140,12 +117,7 @@ async def delete_car(
     ctx: DeviceContext = Depends(get_device_context),
     cars_service: CarService = Depends(get_car_service),
     redis: Redis = Depends(get_redis),
-    streamer: ChatStreamer = Depends(get_chat_streamer),
 ):
-    cars_service.hard_delete(car_id)
+    await cars_service.hard_delete(car_id)
     await _invalidate(redis, ctx.family_id, car_id, also_notes_events=True)
-    await streamer.publish_family_event(
-        ctx.family_id,
-        family_event_payload(type="car.deleted", entity="cars", id=car_id),
-    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

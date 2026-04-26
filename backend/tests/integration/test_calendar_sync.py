@@ -38,7 +38,7 @@ def test_get_sync_state_returns_per_member_row(
         )
     )
     db.commit()
-    resp = client.get("/calendar/sync-state", headers=auth_headers)
+    resp = client.get("/api/calendar/sync-state", headers=auth_headers)
     assert resp.status_code == 200
     rows = resp.json()
     assert len(rows) == 1
@@ -53,7 +53,7 @@ def test_get_sync_state_for_member_without_google_returns_not_connected(
 ) -> None:
     family_id, _, _ = family
     _add_member(db, family_id, name="Dad", color="amber")
-    rows = client.get("/calendar/sync-state", headers=auth_headers).json()
+    rows = client.get("/api/calendar/sync-state", headers=auth_headers).json()
     assert rows[0]["google_status"] == "not_connected"
 
 
@@ -61,7 +61,7 @@ def test_force_pull_for_unknown_member_returns_404(
     client: TestClient, auth_headers
 ) -> None:
     resp = client.post(
-        f"/calendar/sync/pull?member_id={uuid4()}", headers=auth_headers
+        f"/api/calendar/sync/pull?member_id={uuid4()}", headers=auth_headers
     )
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "members.not_found"
@@ -73,7 +73,7 @@ def test_force_pull_for_member_without_google_returns_409(
     family_id, _, _ = family
     dad = _add_member(db, family_id, name="Dad", color="amber")
     resp = client.post(
-        f"/calendar/sync/pull?member_id={dad.id}", headers=auth_headers
+        f"/api/calendar/sync/pull?member_id={dad.id}", headers=auth_headers
     )
     assert resp.status_code == 409
     assert resp.json()["detail"]["code"] == "calendar.not_connected"

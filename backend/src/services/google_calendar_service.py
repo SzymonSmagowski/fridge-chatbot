@@ -94,6 +94,38 @@ class GoogleCalendarService:
 
         return await asyncio.to_thread(_do)
 
+    async def get(
+        self,
+        access_token: str,
+        google_event_id: str,
+    ) -> dict[str, Any]:
+        def _do() -> dict[str, Any]:
+            service = _build_service(access_token)
+            return (
+                service.events()
+                .get(calendarId="primary", eventId=google_event_id)
+                .execute()
+            )
+
+        return await asyncio.to_thread(_do)
+
+    async def insert_raw(
+        self,
+        access_token: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Insert with a fully-formed event body (used for recurring-series split)."""
+
+        def _do() -> dict[str, Any]:
+            service = _build_service(access_token)
+            return (
+                service.events()
+                .insert(calendarId="primary", body=body)
+                .execute()
+            )
+
+        return await asyncio.to_thread(_do)
+
     async def delete(self, access_token: str, google_event_id: str) -> bool:
         def _do() -> bool:
             service = _build_service(access_token)

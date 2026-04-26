@@ -11,7 +11,7 @@ from src.schemas.family import FamilyPreferencesResponse, FamilyResponse
 def test_get_family_returns_seeded_family(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    resp = client.get("/family", headers=auth_headers)
+    resp = client.get("/api/family", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
     assert body["name"] == "Test Family"
@@ -23,7 +23,7 @@ def test_patch_family_updates_name(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     resp = client.patch(
-        "/family", headers=auth_headers, json={"name": "The Magowski Family"}
+        "/api/family", headers=auth_headers, json={"name": "The Magowski Family"}
     )
     assert resp.status_code == 200
     assert resp.json()["name"] == "The Magowski Family"
@@ -32,7 +32,7 @@ def test_patch_family_updates_name(
 def test_get_family_preferences_returns_defaults(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    resp = client.get("/family/preferences", headers=auth_headers)
+    resp = client.get("/api/family/preferences", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
     assert body["sync_interval_sec"] == 300
@@ -45,7 +45,7 @@ def test_patch_family_preferences_partial_update(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     resp = client.patch(
-        "/family/preferences",
+        "/api/family/preferences",
         headers=auth_headers,
         json={"sync_interval_sec": 600, "voice_wake_enabled": True},
     )
@@ -63,7 +63,7 @@ async def test_patch_family_publishes_family_updated(
 ) -> None:
     family_id, _, _ = family
     async with family_event_collector(family_id) as collector:
-        client.patch("/family", headers=auth_headers, json={"name": "Renamed"})
+        client.patch("/api/family", headers=auth_headers, json={"name": "Renamed"})
         frames = await collector.wait_for(1)
     assert frames[0]["type"] == "family.updated"
     assert frames[0]["entity"] == "family"
@@ -76,7 +76,7 @@ async def test_patch_family_preferences_publishes_event(
     family_id, _, _ = family
     async with family_event_collector(family_id) as collector:
         client.patch(
-            "/family/preferences",
+            "/api/family/preferences",
             headers=auth_headers,
             json={"sync_interval_sec": 120},
         )
@@ -90,9 +90,9 @@ async def test_patch_family_invalidates_family_cache(
     client: TestClient, auth_headers, redis_client: Redis, family
 ) -> None:
     family_id, _, _ = family
-    client.get("/family", headers=auth_headers)
+    client.get("/api/family", headers=auth_headers)
     primed = await redis_client.keys(f"family:{family_id}:family")
     assert primed
-    client.patch("/family", headers=auth_headers, json={"name": "New"})
+    client.patch("/api/family", headers=auth_headers, json={"name": "New"})
     after = await redis_client.keys(f"family:{family_id}:family")
     assert after == []

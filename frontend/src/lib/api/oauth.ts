@@ -9,17 +9,24 @@ export interface PairingStartResponse {
   pairing_id: string;
 }
 
-/** First-time device pairing — unauth'd. Returns Google consent URL + pairing id. */
+/**
+ * First-time device pairing — unauth'd. Returns Google consent URL + pairing id.
+ * Per Architect §5.0, pairing's REST surface lives under `/api/`.
+ */
 export const pairingApi = {
   start: (deviceLabel?: string) =>
-    http<PairingStartResponse>("/pairing/start", {
+    http<PairingStartResponse>("/api/pairing/start", {
       method: "POST",
       body: JSON.stringify(deviceLabel ? { device_label: deviceLabel } : {}),
       auth: false,
     }),
 };
 
-/** Add-Google flow for an existing member (post-pairing). */
+/**
+ * Add-Google flow for an existing member (post-pairing). Per Architect §5.0,
+ * the entire `/oauth/*` family stays bare (Google's registered redirect_uri
+ * has no `/api/` prefix and rotating it requires consent-screen coordination).
+ */
 export const oauthApi = {
   authorize: (memberId: string) =>
     http<AuthorizeUrlResponse>(

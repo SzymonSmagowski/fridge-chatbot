@@ -7,16 +7,33 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from src.core.context import current_actor
+from src.core.family_events import family_event_payload
 from src.models import Car, CarStatus
 from src.schemas.cars import CarCreateRequest, CarUpdateRequest
+from src.services.chat_streaming import ChatStreamer
 
 CarStatusFilter = Literal["active", "inactive", "all"]
 
 
 class CarService:
-    def __init__(self, db: Session, family_id: UUID) -> None:
+    def __init__(
+        self, db: Session, family_id: UUID, streamer: ChatStreamer
+    ) -> None:
         self.db = db
         self.family_id = family_id
+        self.streamer = streamer
+
+    async def _publish(self, *, type: str, car_id: UUID) -> None:
+        await self.streamer.publish_family_event(
+            self.family_id,
+            family_event_payload(
+                type=type,
+                entity="cars",
+                id=car_id,
+                actor=current_actor.get(),
+            ),
+        )
 
     def list(self, status_filter: CarStatusFilter = "active") -> list[Car]:
         q = self.db.query(Car).filter(Car.family_id == self.family_id)
@@ -39,7 +56,7 @@ class CarService:
             )
         return car
 
-    def create(self, data: CarCreateRequest) -> Car:
+    async def create(self, data: CarCreateRequest) -> Car:
         car = Car(
             family_id=self.family_id,
             name=data.name,
@@ -52,24 +69,34 @@ class CarService:
         self.db.add(car)
         self.db.commit()
         self.db.refresh(car)
+        await self._publish(type="car.created", car_id=car.id)
         return car
 
-    def update(self, car_id: UUID, data: CarUpdateRequest) -> Car:
+    async def update(self, car_id: UUID, data: CarUpdateRequest) -> Car:
         car = self.get(car_id)
         for field, value in data.model_dump(exclude_unset=True).items():
             setattr(car, field, value)
         self.db.commit()
         self.db.refresh(car)
+        await self._publish(type="car.updated", car_id=car.id)
         return car
 
-    def set_status(self, car_id: UUID, status: CarStatus) -> Car:
+    async def set_status(self, car_id: UUID, status: CarStatus) -> Car:
         car = self.get(car_id)
         car.status = status
         self.db.commit()
         self.db.refresh(car)
+        type_name = (
+            "car.set-active"
+            if status == CarStatus.active
+            else "car.set-inactive"
+        )
+        await self._publish(type=type_name, car_id=car.id)
         return car
 
-    def hard_delete(self, car_id: UUID) -> None:
+    async def hard_delete(self, car_id: UUID) -> None:
         car = self.get(car_id)
+        deleted_id = car.id
         self.db.delete(car)
         self.db.commit()
+        await self._publish(type="car.deleted", car_id=deleted_id)

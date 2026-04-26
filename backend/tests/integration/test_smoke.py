@@ -16,6 +16,6 @@ def test_smoke_health_endpoint_returns_ok(client: TestClient) -> None:
 
 
 def test_smoke_unauth_endpoint_rejects_missing_token(client: TestClient) -> None:
-    """Bare GET /family without Authorization header → 401."""
-    resp = client.get("/family")
+    """Bare GET /api/family without Authorization header → 401."""
+    resp = client.get("/api/family")
     assert resp.status_code == 401

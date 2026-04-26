@@ -1,5 +1,6 @@
 /**
- * Canned MSW handlers for Architect §5 endpoints.
+ * Canned MSW handlers for Architect §5 endpoints. All family-scoped paths are
+ * `/api/`-prefixed per §5.0; `/auth/*` and `/oauth/*` (and `/ws/*`) stay bare.
  *
  * These shapes mirror the contract verbatim so tests catch the case where
  * production code drifts from the Architect's spec. Update only when §5
@@ -204,23 +205,23 @@ export function successHandlers(opts?: {
   const events = opts?.events ?? FIXTURE_EVENTS;
 
   return [
-    http.get(`${BACKEND}/family`, () => HttpResponse.json(FIXTURE_FAMILY)),
-    http.get(`${BACKEND}/family/preferences`, () =>
+    http.get(`${BACKEND}/api/family`, () => HttpResponse.json(FIXTURE_FAMILY)),
+    http.get(`${BACKEND}/api/family/preferences`, () =>
       HttpResponse.json(FIXTURE_PREFERENCES),
     ),
-    http.patch(`${BACKEND}/family/preferences`, async ({ request }) => {
+    http.patch(`${BACKEND}/api/family/preferences`, async ({ request }) => {
       const body = (await request.json()) as Partial<FamilyPreferencesResponse>;
       return HttpResponse.json({ ...FIXTURE_PREFERENCES, ...body });
     }),
 
-    http.get(`${BACKEND}/members`, ({ request }) => {
+    http.get(`${BACKEND}/api/members`, ({ request }) => {
       const url = new URL(request.url);
       const status = url.searchParams.get("status") ?? "active";
       const filtered =
         status === "all" ? members : members.filter((m) => m.status === status);
       return HttpResponse.json(filtered);
     }),
-    http.post(`${BACKEND}/members`, async ({ request }) => {
+    http.post(`${BACKEND}/api/members`, async ({ request }) => {
       const body = (await request.json()) as {
         name: string;
         nickname?: string | null;
@@ -239,7 +240,7 @@ export function successHandlers(opts?: {
       };
       return HttpResponse.json(created, { status: 201 });
     }),
-    http.post(`${BACKEND}/members/:id/set-inactive`, ({ params }) => {
+    http.post(`${BACKEND}/api/members/:id/set-inactive`, ({ params }) => {
       const m = members.find((x) => x.id === params.id);
       if (!m)
         return HttpResponse.json(
@@ -249,14 +250,14 @@ export function successHandlers(opts?: {
       return HttpResponse.json({ ...m, status: "inactive" as const });
     }),
 
-    http.get(`${BACKEND}/cars`, ({ request }) => {
+    http.get(`${BACKEND}/api/cars`, ({ request }) => {
       const url = new URL(request.url);
       const status = url.searchParams.get("status") ?? "active";
       const filtered =
         status === "all" ? cars : cars.filter((c) => c.status === status);
       return HttpResponse.json(filtered);
     }),
-    http.post(`${BACKEND}/cars`, async ({ request }) => {
+    http.post(`${BACKEND}/api/cars`, async ({ request }) => {
       const body = (await request.json()) as {
         name: string;
         year?: number | null;
@@ -277,12 +278,12 @@ export function successHandlers(opts?: {
       };
       return HttpResponse.json(created, { status: 201 });
     }),
-    http.delete(`${BACKEND}/cars/:id`, () => new HttpResponse(null, { status: 204 })),
+    http.delete(`${BACKEND}/api/cars/:id`, () => new HttpResponse(null, { status: 204 })),
 
-    http.get(`${BACKEND}/notes`, () =>
+    http.get(`${BACKEND}/api/notes`, () =>
       HttpResponse.json<NoteListResponse>({ items: notes, total: notes.length }),
     ),
-    http.post(`${BACKEND}/notes`, async ({ request }) => {
+    http.post(`${BACKEND}/api/notes`, async ({ request }) => {
       const body = (await request.json()) as {
         content: string;
         assignee_member_id?: string | null;
@@ -302,7 +303,7 @@ export function successHandlers(opts?: {
       };
       return HttpResponse.json(created, { status: 201 });
     }),
-    http.patch(`${BACKEND}/notes/:id`, async ({ params, request }) => {
+    http.patch(`${BACKEND}/api/notes/:id`, async ({ params, request }) => {
       const target = notes.find((n) => n.id === params.id);
       if (!target)
         return HttpResponse.json(
@@ -312,12 +313,12 @@ export function successHandlers(opts?: {
       const body = (await request.json()) as Partial<NoteResponse>;
       return HttpResponse.json({ ...target, ...body, updated_at: new Date().toISOString() });
     }),
-    http.delete(`${BACKEND}/notes/:id`, () => new HttpResponse(null, { status: 204 })),
+    http.delete(`${BACKEND}/api/notes/:id`, () => new HttpResponse(null, { status: 204 })),
 
-    http.get(`${BACKEND}/events`, () =>
+    http.get(`${BACKEND}/api/events`, () =>
       HttpResponse.json<EventListResponse>({ items: events, total: events.length }),
     ),
-    http.post(`${BACKEND}/events`, async ({ request }) => {
+    http.post(`${BACKEND}/api/events`, async ({ request }) => {
       const body = (await request.json()) as Partial<EventResponse> & { title: string };
       const created: EventResponse = {
         id: `e-${Date.now()}`,
@@ -341,7 +342,7 @@ export function successHandlers(opts?: {
       return HttpResponse.json(created, { status: 201 });
     }),
 
-    http.get(`${BACKEND}/calendar/sync-state`, () =>
+    http.get(`${BACKEND}/api/calendar/sync-state`, () =>
       HttpResponse.json(FIXTURE_SYNC_STATES),
     ),
   ];

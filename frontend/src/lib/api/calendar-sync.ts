@@ -10,10 +10,10 @@ export interface SyncStateResponse {
 }
 
 export const calendarSyncApi = {
-  state: () => http<SyncStateResponse[]>("/calendar/sync-state"),
+  state: () => http<SyncStateResponse[]>("/api/calendar/sync-state"),
   pullMember: (memberId: string) =>
     http<SyncStateResponse>(
-      `/calendar/sync/pull?member_id=${encodeURIComponent(memberId)}`,
+      `/api/calendar/sync/pull?member_id=${encodeURIComponent(memberId)}`,
       { method: "POST" },
     ),
 };

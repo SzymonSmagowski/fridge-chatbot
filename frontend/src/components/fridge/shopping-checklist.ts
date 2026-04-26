@@ -5,7 +5,7 @@
  *   `[ ] foo` => pending
  *   `foo`     => pending
  *
- * Toggling a checkbox sends PATCH /notes/{id} with the rebuilt content string.
+ * Toggling a checkbox sends PATCH /api/notes/{id} with the rebuilt content string.
  */
 export type ChecklistItem = { text: string; done: boolean };
 

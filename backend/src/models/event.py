@@ -52,6 +52,11 @@ class Event(Base):
         nullable=True,
     )
     rrule = Column(Text, nullable=True)
+    parent_event_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("events.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -68,6 +73,12 @@ class Event(Base):
     __table_args__ = (
         Index("ix_events_family_start", "family_id", "start_at"),
         Index("ix_events_family_assignee", "family_id", "assignee_member_id"),
+        Index(
+            "ix_events_family_parent_start",
+            "family_id",
+            "parent_event_id",
+            "start_at",
+        ),
     )
 
 

@@ -27,12 +27,12 @@ from src.schemas.members import MemberResponse
 
 
 def test_get_members_without_token_returns_401(client: TestClient) -> None:
-    resp = client.get("/members")
+    resp = client.get("/api/members")
     assert resp.status_code == 401
 
 
 def test_get_members_with_garbage_token_returns_401(client: TestClient) -> None:
-    resp = client.get("/members", headers={"Authorization": "Bearer garbage"})
+    resp = client.get("/api/members", headers={"Authorization": "Bearer garbage"})
     assert resp.status_code == 401
 
 
@@ -41,7 +41,7 @@ def test_get_members_with_user_jwt_returns_401(
 ) -> None:
     """User-JWTs (typ != device) must NOT pass get_device_context."""
     user_jwt = make_jwt(typ="access")
-    resp = client.get("/members", headers={"Authorization": f"Bearer {user_jwt}"})
+    resp = client.get("/api/members", headers={"Authorization": f"Bearer {user_jwt}"})
     assert resp.status_code == 401
 
 
@@ -54,7 +54,7 @@ def test_post_members_creates_active_member_and_returns_201(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     resp = client.post(
-        "/members",
+        "/api/members",
         headers=auth_headers,
         json={"name": "Ola", "color": "sage"},
     )
@@ -76,21 +76,21 @@ def test_post_members_creates_active_member_and_returns_201(
 def test_get_members_lists_only_active_by_default(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    client.post("/members", headers=auth_headers, json={"name": "Mom", "color": "rose"})
+    client.post("/api/members", headers=auth_headers, json={"name": "Mom", "color": "rose"})
     inactive = client.post(
-        "/members", headers=auth_headers, json={"name": "Old Cat", "color": "stone"}
+        "/api/members", headers=auth_headers, json={"name": "Old Cat", "color": "stone"}
     ).json()
     client.post(
-        f"/members/{inactive['id']}/set-inactive", headers=auth_headers
+        f"/api/members/{inactive['id']}/set-inactive", headers=auth_headers
     )
 
-    resp = client.get("/members", headers=auth_headers)
+    resp = client.get("/api/members", headers=auth_headers)
     assert resp.status_code == 200
     names = [m["name"] for m in resp.json()]
     assert "Mom" in names
     assert "Old Cat" not in names
 
-    all_resp = client.get("/members?status=all", headers=auth_headers)
+    all_resp = client.get("/api/members?status=all", headers=auth_headers)
     assert "Old Cat" in [m["name"] for m in all_resp.json()]
 
 
@@ -98,11 +98,11 @@ def test_patch_member_updates_name_and_persists(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     created = client.post(
-        "/members", headers=auth_headers, json={"name": "Mom", "color": "rose"}
+        "/api/members", headers=auth_headers, json={"name": "Mom", "color": "rose"}
     ).json()
     member_id = created["id"]
     resp = client.patch(
-        f"/members/{member_id}",
+        f"/api/members/{member_id}",
         headers=auth_headers,
         json={"name": "Mama", "nickname": "Mum"},
     )
@@ -111,7 +111,7 @@ def test_patch_member_updates_name_and_persists(
     assert resp.json()["nickname"] == "Mum"
 
     # Survives a fresh GET (cache or DB — both should agree).
-    fetched = client.get(f"/members/{member_id}", headers=auth_headers).json()
+    fetched = client.get(f"/api/members/{member_id}", headers=auth_headers).json()
     assert fetched["name"] == "Mama"
 
 
@@ -120,10 +120,10 @@ def test_set_inactive_soft_deletes_member_keeping_history(
 ) -> None:
     """members.md MoSCoW Must: soft delete, name + color preserved."""
     created = client.post(
-        "/members", headers=auth_headers, json={"name": "Dad", "color": "amber"}
+        "/api/members", headers=auth_headers, json={"name": "Dad", "color": "amber"}
     ).json()
     member_id = created["id"]
-    resp = client.post(f"/members/{member_id}/set-inactive", headers=auth_headers)
+    resp = client.post(f"/api/members/{member_id}/set-inactive", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["status"] == "inactive"
 
@@ -139,11 +139,11 @@ def test_set_active_reactivates_member(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     created = client.post(
-        "/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
+        "/api/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
     ).json()
     member_id = created["id"]
-    client.post(f"/members/{member_id}/set-inactive", headers=auth_headers)
-    resp = client.post(f"/members/{member_id}/set-active", headers=auth_headers)
+    client.post(f"/api/members/{member_id}/set-inactive", headers=auth_headers)
+    resp = client.post(f"/api/members/{member_id}/set-active", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["status"] == "active"
 
@@ -157,7 +157,7 @@ def test_post_members_with_empty_name_returns_422(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     resp = client.post(
-        "/members", headers=auth_headers, json={"name": "", "color": "sage"}
+        "/api/members", headers=auth_headers, json={"name": "", "color": "sage"}
     )
     assert resp.status_code == 422
 
@@ -165,7 +165,7 @@ def test_post_members_with_empty_name_returns_422(
 def test_post_members_with_missing_color_returns_422(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    resp = client.post("/members", headers=auth_headers, json={"name": "Ola"})
+    resp = client.post("/api/members", headers=auth_headers, json={"name": "Ola"})
     assert resp.status_code == 422
 
 
@@ -180,13 +180,13 @@ def test_get_member_in_other_family_returns_404_not_found_not_403(
     """Cross-family UUID must produce 404 with `members.not_found`, never 403."""
     _other_fam, _device, _other_token = make_family(family_name="Other Family")
     other_member = client.post(
-        "/members",
+        "/api/members",
         headers={"Authorization": f"Bearer {_other_token}"},
         json={"name": "Stranger", "color": "ocean"},
     ).json()
 
     resp = client.get(
-        f"/members/{other_member['id']}", headers=auth_headers
+        f"/api/members/{other_member['id']}", headers=auth_headers
     )
     assert resp.status_code == 404
     body = resp.json()
@@ -196,7 +196,7 @@ def test_get_member_in_other_family_returns_404_not_found_not_403(
 def test_get_member_with_random_uuid_returns_404(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    resp = client.get(f"/members/{uuid4()}", headers=auth_headers)
+    resp = client.get(f"/api/members/{uuid4()}", headers=auth_headers)
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "members.not_found"
 
@@ -211,10 +211,10 @@ async def test_get_members_caches_response_in_redis(
     client: TestClient, auth_headers: dict[str, str], redis_client: Redis, family
 ) -> None:
     family_id, _device_id, _ = family
-    client.post("/members", headers=auth_headers, json={"name": "Mom", "color": "rose"})
+    client.post("/api/members", headers=auth_headers, json={"name": "Mom", "color": "rose"})
 
     # Two GETs — second should be a cache hit (key populated).
-    client.get("/members", headers=auth_headers)
+    client.get("/api/members", headers=auth_headers)
     keys = await redis_client.keys(f"family:{family_id}:members:*")
     assert keys, "expected cache-aside to populate at least one members:* key"
 
@@ -225,11 +225,11 @@ async def test_post_members_invalidates_list_cache(
 ) -> None:
     family_id, _, _ = family
     # Prime cache.
-    client.get("/members", headers=auth_headers)
+    client.get("/api/members", headers=auth_headers)
     primed = await redis_client.keys(f"family:{family_id}:members:*")
     assert primed
     # Write — should drop those keys.
-    client.post("/members", headers=auth_headers, json={"name": "Ola", "color": "sage"})
+    client.post("/api/members", headers=auth_headers, json={"name": "Ola", "color": "sage"})
     after = await redis_client.keys(f"family:{family_id}:members:*")
     assert after == [], "POST /members should evict family:{id}:members:*"
 
@@ -249,7 +249,7 @@ async def test_post_members_publishes_member_created_event(
     family_id, _, _ = family
     async with family_event_collector(family_id) as collector:
         client.post(
-            "/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
+            "/api/members", headers=auth_headers, json={"name": "Ola", "color": "sage"}
         )
         frames = await collector.wait_for(1)
     assert len(frames) >= 1
@@ -270,12 +270,15 @@ async def test_set_inactive_publishes_member_updated_event(
 ) -> None:
     family_id, _, _ = family
     created = client.post(
-        "/members", headers=auth_headers, json={"name": "Mom", "color": "rose"}
+        "/api/members", headers=auth_headers, json={"name": "Mom", "color": "rose"}
     ).json()
     async with family_event_collector(family_id) as collector:
-        client.post(f"/members/{created['id']}/set-inactive", headers=auth_headers)
+        client.post(f"/api/members/{created['id']}/set-inactive", headers=auth_headers)
         frames = await collector.wait_for(1)
     assert len(frames) >= 1
-    assert frames[0]["type"] == "member.updated"
+    # §5.11: set-inactive emits the granular `member.set-inactive` frame, not the
+    # generic `member.updated`. Both shapes are spec-listed; the more specific
+    # one wins so kiosks can tell deactivations apart from rename/recolor edits.
+    assert frames[0]["type"] == "member.set-inactive"
     assert frames[0]["entity"] == "members"
     assert frames[0]["id"] == created["id"]

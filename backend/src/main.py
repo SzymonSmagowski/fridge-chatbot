@@ -118,19 +118,26 @@ def create_app() -> FastAPI:
     app.state.limiter = get_limiter(settings)
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
+    # Bare-path routers (excluded from the /api/ prefix per architecture §5.0):
+    #  - /auth/*  legacy machinery for thread FKs, JWT clients depend on it
+    #  - /oauth/* Google's redirect_uri is registered without /api/
+    #  - /ws/*    WebSocket convention in this codebase is no /api/ prefix
+    #  - /users, /threads — pre-existing chat surface kept stable
     app.include_router(auth.router)
     app.include_router(users.router)
     app.include_router(threads.router)
-    app.include_router(pairing.router)
     app.include_router(oauth.router)
-    app.include_router(family.router)
-    app.include_router(members.router)
-    app.include_router(cars.router)
-    app.include_router(notes.router)
-    app.include_router(labels.router)
-    app.include_router(events.router)
-    app.include_router(calendar_sync.router)
     app.include_router(family_events_ws.router)
+
+    # Family-scoped REST routers — namespaced under /api/ per architecture §5.0
+    app.include_router(pairing.router, prefix="/api")
+    app.include_router(family.router, prefix="/api")
+    app.include_router(members.router, prefix="/api")
+    app.include_router(cars.router, prefix="/api")
+    app.include_router(notes.router, prefix="/api")
+    app.include_router(labels.router, prefix="/api")
+    app.include_router(events.router, prefix="/api")
+    app.include_router(calendar_sync.router, prefix="/api")
 
     @app.get("/health")
     def health_check():

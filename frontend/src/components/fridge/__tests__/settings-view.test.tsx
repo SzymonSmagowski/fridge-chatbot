@@ -55,7 +55,7 @@ describe("[integration] SettingsView — members", () => {
     let postedBody: { name: string; color: string; nickname: string | null } | null = null;
     server.use(...successHandlers());
     server.use(
-      http.post(`${BACKEND}/members`, async ({ request }) => {
+      http.post(`${BACKEND}/api/members`, async ({ request }) => {
         postedBody = (await request.json()) as typeof postedBody;
         return HttpResponse.json(
           {
@@ -95,7 +95,7 @@ describe("[integration] SettingsView — members", () => {
     let setInactiveCalled = false;
     server.use(...successHandlers());
     server.use(
-      http.post(`${BACKEND}/members/m-ola/set-inactive`, () => {
+      http.post(`${BACKEND}/api/members/m-ola/set-inactive`, () => {
         setInactiveCalled = true;
         return HttpResponse.json({ ...FIXTURE_MEMBERS[2], status: "inactive" });
       }),
@@ -131,7 +131,7 @@ describe("[integration] SettingsView — cars", () => {
     let deleted = false;
     server.use(...successHandlers());
     server.use(
-      http.delete(`${BACKEND}/cars/c-civic`, () => {
+      http.delete(`${BACKEND}/api/cars/c-civic`, () => {
         deleted = true;
         return new HttpResponse(null, { status: 204 });
       }),
@@ -155,7 +155,7 @@ describe("[integration] SettingsView — cars", () => {
     let posted: { name: string; year: number | null } | null = null;
     server.use(...successHandlers());
     server.use(
-      http.post(`${BACKEND}/cars`, async ({ request }) => {
+      http.post(`${BACKEND}/api/cars`, async ({ request }) => {
         posted = (await request.json()) as typeof posted;
         return HttpResponse.json(
           {
@@ -189,11 +189,11 @@ describe("[integration] SettingsView — cars", () => {
 });
 
 describe("[integration] SettingsView — preferences", () => {
-  test("toggles fan-out preference and PATCHes /family/preferences", async () => {
+  test("toggles fan-out preference and PATCHes /api/family/preferences", async () => {
     let patched: Record<string, unknown> | null = null;
     server.use(...successHandlers());
     server.use(
-      http.patch(`${BACKEND}/family/preferences`, async ({ request }) => {
+      http.patch(`${BACKEND}/api/family/preferences`, async ({ request }) => {
         patched = (await request.json()) as typeof patched;
         return HttpResponse.json({
           family_id: "fam-1",

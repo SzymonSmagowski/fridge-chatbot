@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.core.context import current_actor
 from src.core.settings import Settings
 from src.db.postgres import Database
 from src.db.shared_engine import get_session_factory
@@ -136,11 +137,17 @@ def get_device_context(
     if not device_id or not family_id:
         raise _credentials_exception
     try:
-        return DeviceContext(
+        ctx = DeviceContext(
             device_id=UUID(device_id), family_id=UUID(family_id)
         )
     except (ValueError, TypeError) as exc:
         raise _credentials_exception from exc
+
+    # Stamp the per-request actor for downstream service-layer publishes (§6.6).
+    # Idempotent — "rest" is the default — but explicit so a request leaving the
+    # actor as "chat-tool" from a previous task on this thread is impossible.
+    current_actor.set("rest")
+    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -149,44 +156,50 @@ def get_device_context(
 def get_family_service(
     ctx: DeviceContext = Depends(get_device_context),
     db: Session = Depends(get_db),
+    streamer: ChatStreamer = Depends(get_chat_streamer),
 ) -> FamilyService:
-    return FamilyService(db, ctx.family_id)
+    return FamilyService(db, ctx.family_id, streamer)
 
 
 def get_family_preferences_service(
     ctx: DeviceContext = Depends(get_device_context),
     db: Session = Depends(get_db),
+    streamer: ChatStreamer = Depends(get_chat_streamer),
 ) -> FamilyPreferencesService:
-    return FamilyPreferencesService(db, ctx.family_id)
+    return FamilyPreferencesService(db, ctx.family_id, streamer)
 
 
 def get_member_service(
     ctx: DeviceContext = Depends(get_device_context),
     db: Session = Depends(get_db),
+    streamer: ChatStreamer = Depends(get_chat_streamer),
 ) -> MemberService:
-    return MemberService(db, ctx.family_id)
+    return MemberService(db, ctx.family_id, streamer)
 
 
 def get_car_service(
     ctx: DeviceContext = Depends(get_device_context),
     db: Session = Depends(get_db),
+    streamer: ChatStreamer = Depends(get_chat_streamer),
 ) -> CarService:
-    return CarService(db, ctx.family_id)
+    return CarService(db, ctx.family_id, streamer)
 
 
 def get_label_service(
     ctx: DeviceContext = Depends(get_device_context),
     db: Session = Depends(get_db),
+    streamer: ChatStreamer = Depends(get_chat_streamer),
 ) -> LabelService:
-    return LabelService(db, ctx.family_id)
+    return LabelService(db, ctx.family_id, streamer)
 
 
 def get_note_service(
     ctx: DeviceContext = Depends(get_device_context),
     db: Session = Depends(get_db),
     label_service: LabelService = Depends(get_label_service),
+    streamer: ChatStreamer = Depends(get_chat_streamer),
 ) -> NoteService:
-    return NoteService(db, ctx.family_id, label_service)
+    return NoteService(db, ctx.family_id, label_service, streamer)
 
 
 def get_event_target_resolver(
@@ -200,8 +213,18 @@ def get_event_service(
     ctx: DeviceContext = Depends(get_device_context),
     db: Session = Depends(get_db),
     resolver: EventTargetResolver = Depends(get_event_target_resolver),
+    streamer: ChatStreamer = Depends(get_chat_streamer),
+    calendar: GoogleCalendarService = Depends(get_google_calendar_service),
+    token_service: GoogleTokenService = Depends(get_google_token_service),
 ) -> EventService:
-    return EventService(db, ctx.family_id, resolver)
+    return EventService(
+        db,
+        ctx.family_id,
+        resolver,
+        streamer,
+        calendar=calendar,
+        token_service=token_service,
+    )
 
 
 # ---------------------------------------------------------------------------

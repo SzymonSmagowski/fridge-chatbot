@@ -4,7 +4,7 @@
  * Re-uses the BACKEND_URL + getToken from the existing api.ts module so we
  * stay on a single auth token (the JWT issued by /auth/login today; per
  * Architect §4 the same JWT cookie/localStorage slot will hold the device
- * JWT once /pairing/start is wired through the OAuth flow).
+ * JWT once /api/pairing/start is wired through the OAuth flow).
  */
 import { getToken } from "@/lib/auth";
 import { ApiError, BACKEND_URL } from "./_legacy";

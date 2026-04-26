@@ -262,19 +262,14 @@ async def _handle_pair_callback(
     device_token = auth_service.create_device_token(
         device_id=device.id, family_id=family.id
     )
-    redirect = RedirectResponse(
-        url=f"/settings?paired=1&token={device_token}",
+    # v1 hardening trade-off (spec §11): the device token is delivered in the
+    # URL query string so the SPA's `/pair/complete` page can grab it without a
+    # backend session. Acceptable for a one-shot pairing redirect; the cookie
+    # path is gone — frontend persists to localStorage + cookie itself.
+    return RedirectResponse(
+        url=f"/pair/complete?token={device_token}",
         status_code=status.HTTP_302_FOUND,
     )
-    redirect.set_cookie(
-        "fridge_device_token",
-        device_token,
-        httponly=True,
-        secure=False,  # dev — flip to True in prod
-        samesite="lax",
-        max_age=settings.DEVICE_TOKEN_EXPIRE_DAYS * 86400,
-    )
-    return redirect
 
 
 async def _handle_connect_callback(

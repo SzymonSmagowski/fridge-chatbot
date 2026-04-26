@@ -11,13 +11,15 @@ silently misbehave).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from src.core.context import current_actor
+from src.core.family_events import family_event_payload
 from src.models import (
     Car,
     Event,
@@ -35,7 +37,13 @@ from src.schemas.events import (
     EventUpdateRequest,
     ExternalEventResponse,
 )
+from src.services.chat_streaming import ChatStreamer
 from src.services.event_target_resolver import EventTargetPlan, EventTargetResolver
+from src.services.google_calendar_service import GoogleCalendarService
+from src.services.google_token_service import GoogleTokenService
+from src.services.logger import get_logger
+
+logger = get_logger("event_service")
 
 EventScope = Literal["instance", "all_future"]
 EventSourceFilter = Literal["fridge", "external", "all"]
@@ -56,10 +64,27 @@ class EventService:
         db: Session,
         family_id: UUID,
         target_resolver: EventTargetResolver,
+        streamer: ChatStreamer,
+        calendar: GoogleCalendarService | None = None,
+        token_service: GoogleTokenService | None = None,
     ) -> None:
         self.db = db
         self.family_id = family_id
         self.targets = target_resolver
+        self.streamer = streamer
+        self.calendar = calendar
+        self.token_service = token_service
+
+    async def _publish(self, *, type: str, event_id: UUID) -> None:
+        await self.streamer.publish_family_event(
+            self.family_id,
+            family_event_payload(
+                type=type,
+                entity="events",
+                id=event_id,
+                actor=current_actor.get(),
+            ),
+        )
 
     # ---- reads -------------------------------------------------------------
     def list(self, filters: EventListFilters) -> EventListResponse:
@@ -132,7 +157,7 @@ class EventService:
         return ev
 
     # ---- writes ------------------------------------------------------------
-    def create(self, data: EventCreateRequest) -> tuple[Event, list[EventTargetPlan]]:
+    async def create(self, data: EventCreateRequest) -> tuple[Event, list[EventTargetPlan]]:
         family = self.db.query(Family).filter(Family.id == self.family_id).first()
         fallback_tz = family.timezone if family else "UTC"
 
@@ -172,12 +197,25 @@ class EventService:
 
         self.db.commit()
         self.db.refresh(ev)
+        await self._publish(type="event.created", event_id=ev.id)
         return ev, plans
 
-    def update(
+    async def update(
         self, event_id: UUID, data: EventUpdateRequest, scope: EventScope = "instance"
     ) -> Event:
         ev = self.get(event_id)
+
+        # Recurring "this and following" mechanic — split the series in two.
+        # See §5.7 step list and §6.7 algorithm.
+        if scope == "all_future" and ev.rrule:
+            new_ev = await self._split_recurring_series(
+                event_id=event_id,
+                instance_start_time=ev.start_at,
+                patch_body=data.model_dump(exclude_unset=True),
+            )
+            await self._publish(type="event.updated", event_id=event_id)
+            return new_ev
+
         updates = data.model_dump(exclude_unset=True)
         car_ids = updates.pop("car_ids", None)
 
@@ -201,12 +239,15 @@ class EventService:
 
         self.db.commit()
         self.db.refresh(ev)
+        await self._publish(type="event.updated", event_id=ev.id)
         return ev
 
-    def delete(self, event_id: UUID, scope: EventScope = "instance") -> None:
+    async def delete(self, event_id: UUID, scope: EventScope = "instance") -> None:
         ev = self.get(event_id)
+        deleted_id = ev.id
         self.db.delete(ev)
         self.db.commit()
+        await self._publish(type="event.deleted", event_id=deleted_id)
 
     def mark_target(
         self,
@@ -232,7 +273,7 @@ class EventService:
             target.retry_count += 1
         self.db.commit()
 
-    def resync(self, event_id: UUID) -> Event:
+    async def resync(self, event_id: UUID) -> Event:
         ev = self.get(event_id)
         for target in ev.targets:
             if target.sync_status == EventTargetSyncStatus.failed:
@@ -240,6 +281,7 @@ class EventService:
                 target.last_error = None
         self.db.commit()
         self.db.refresh(ev)
+        await self._publish(type="event.resync", event_id=ev.id)
         return ev
 
     # ---- response builder --------------------------------------------------
@@ -289,3 +331,236 @@ class EventService:
         if description:
             return f"{car_line}\n{description}"
         return car_line
+
+    # ---- recurring-series split (§5.7 / §6.7) -----------------------------
+    async def _split_recurring_series(
+        self,
+        *,
+        event_id: UUID,
+        instance_start_time: datetime,
+        patch_body: dict,
+    ) -> Event:
+        """Implements the §5.7 5-step "this and following" mechanic.
+
+        Caps the original Google master with `UNTIL=<instance - 1s>`, inserts
+        a new Google master with the patched fields and the original (uncapped)
+        RRULE, then mirrors the split locally: the original local row's rrule
+        becomes the capped form, and a new local row + parallel event_targets
+        are inserted with `sync_status=synced` (Google already returned the
+        new ids).
+
+        Edge cases:
+        - No RRULE on the local event: caller should not invoke this; we
+          return the original event unchanged as a defensive no-op.
+        - Existing UNTIL/COUNT on the original RRULE: stripped before the
+          new UNTIL is appended.
+        - Idempotency: if the local event's RRULE is already capped with
+          a matching UNTIL boundary, return the existing sibling (no
+          double-split).
+        - Google insert failure after master patch: rolls back the local
+          DB transaction and raises 502; the operator can recover via
+          POST /api/events/{id}/resync.
+        """
+        if self.calendar is None or self.token_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "events.recurring_split_unavailable",
+                    "detail": (
+                        "Google integration not configured; cannot split recurring series"
+                    ),
+                },
+            )
+
+        ev = self.get(event_id)
+        if not ev.rrule:
+            # Edge case: caller invoked us on a non-recurring event. Treat as
+            # a no-op so the caller's `update(scope="all_future")` falls
+            # through to the single-instance code path on the next call.
+            return ev
+
+        # Idempotency: detect already-capped RRULE that matches this instance.
+        until_token = _format_until(instance_start_time)
+        if f"UNTIL={until_token}" in ev.rrule:
+            sibling = self._find_split_sibling(ev, instance_start_time)
+            if sibling is not None:
+                return sibling
+
+        new_rrule = _cap_rrule_with_until(ev.rrule, instance_start_time)
+
+        # Build the new master's body fields by merging the patch over the
+        # current master's surviving fields.
+        merged = {
+            "title": patch_body.get("title", ev.title),
+            "description": patch_body.get("description", ev.description),
+            "start_at": patch_body.get("start_at", instance_start_time),
+            "end_at": patch_body.get("end_at", _shift_end(ev, instance_start_time)),
+            "timezone": patch_body.get("timezone", ev.timezone),
+            "location": patch_body.get("location", ev.location),
+            "assignee_member_id": patch_body.get(
+                "assignee_member_id", ev.assignee_member_id
+            ),
+            "rrule": ev.rrule,  # the new master keeps the ORIGINAL uncapped rrule
+        }
+
+        # Step 1-4: cap the Google master + insert the new Google master per
+        # existing target (one Google round-trip pair per fanned-out member).
+        target_results: list[tuple[EventTarget, str]] = []
+        for target in ev.targets:
+            if not target.google_event_id:
+                continue
+            access_token = await self.token_service.get_access_token(
+                target.member_id
+            )
+            if not access_token:
+                # Skip this target; it'll be picked up on next resync.
+                continue
+
+            try:
+                # Cap the original Google master.
+                await self.calendar.update(
+                    access_token,
+                    target.google_event_id,
+                    {"recurrence": [_with_rrule_prefix(new_rrule)]},
+                )
+                # Insert the new Google master.
+                inserted = await self.calendar.insert_raw(
+                    access_token,
+                    _build_google_event_body(merged),
+                )
+                new_google_id = inserted["id"]
+                target_results.append((target, new_google_id))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "_split_recurring_series google call failed for target %s: %s",
+                    target.id,
+                    exc,
+                )
+                self.db.rollback()
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "events.recurring_split_partial",
+                        "detail": (
+                            "Google API error mid-split; original master may be "
+                            "capped but new master missing. Use /events/{id}/resync."
+                        ),
+                    },
+                ) from exc
+
+        # Step 5: mirror the split in the local DB. Cap the original local
+        # rrule, then insert the new master with the ORIGINAL uncapped rrule.
+        ev.rrule = new_rrule
+
+        new_local = Event(
+            family_id=self.family_id,
+            title=merged["title"],
+            description=merged["description"],
+            start_at=merged["start_at"],
+            end_at=merged["end_at"],
+            timezone=merged["timezone"],
+            location=merged["location"],
+            assignee_member_id=merged["assignee_member_id"],
+            rrule=merged["rrule"],
+            parent_event_id=ev.id,
+        )
+
+        # Carry car links onto the new local event.
+        for link in ev.car_links:
+            new_local.car_links.append(EventCar(car_id=link.car_id))
+
+        self.db.add(new_local)
+        self.db.flush()  # populate new_local.id
+
+        # Parallel event_targets on the new local event — Google already
+        # returned ids so sync_status=synced.
+        now = datetime.now(tz=timezone.utc)
+        for target, new_google_id in target_results:
+            new_local.targets.append(
+                EventTarget(
+                    member_id=target.member_id,
+                    google_event_id=new_google_id,
+                    sync_status=EventTargetSyncStatus.synced,
+                    synced_at=now,
+                )
+            )
+
+        self.db.commit()
+        self.db.refresh(new_local)
+        return new_local
+
+    def _find_split_sibling(
+        self, original: Event, instance_start_time: datetime
+    ) -> Event | None:
+        """Idempotency helper — find a previously-created sibling event row.
+
+        Matches on `(family_id, parent_event_id, start_at)` — a stable
+        composite key that does NOT depend on patched fields like `title`.
+        Filtering by title broke idempotency when the patch renamed the
+        event (the new sibling carries the patched title, so a retry
+        couldn't find it and inserted a duplicate row + duplicate Google
+        master).
+        """
+        return (
+            self.db.query(Event)
+            .filter(
+                Event.family_id == self.family_id,
+                Event.parent_event_id == original.id,
+                Event.start_at == instance_start_time,
+            )
+            .first()
+        )
+
+
+# ---- module-level helpers (no-state, easy to unit test) ----------------
+def _format_until(instance_start_time: datetime) -> str:
+    """RFC 5545 UTC basic format, e.g. 20260513T080000Z, one second BEFORE
+    the new master's start so the original series ends right before it."""
+    boundary = instance_start_time - timedelta(seconds=1)
+    if boundary.tzinfo is None:
+        boundary = boundary.replace(tzinfo=timezone.utc)
+    boundary_utc = boundary.astimezone(timezone.utc)
+    return boundary_utc.strftime("%Y%m%dT%H%M%SZ")
+
+
+def _cap_rrule_with_until(original_rrule: str, instance_start_time: datetime) -> str:
+    """Strip any existing UNTIL/COUNT from the RRULE, then append a new UNTIL."""
+    parts = [p for p in original_rrule.split(";") if p]
+    cleaned = [
+        p for p in parts if not p.startswith("UNTIL=") and not p.startswith("COUNT=")
+    ]
+    cleaned.append(f"UNTIL={_format_until(instance_start_time)}")
+    return ";".join(cleaned)
+
+
+def _with_rrule_prefix(rrule: str) -> str:
+    """Google's recurrence array entries must start with `RRULE:`."""
+    return rrule if rrule.startswith("RRULE:") else f"RRULE:{rrule}"
+
+
+def _shift_end(original: Event, new_start: datetime) -> datetime:
+    """Preserve the original duration when only `start_at` is patched."""
+    duration = original.end_at - original.start_at
+    return new_start + duration
+
+
+def _build_google_event_body(merged: dict) -> dict:
+    """Build the Google Events.insert body from a merged-fields dict."""
+    body: dict = {
+        "summary": merged["title"],
+        "start": {
+            "dateTime": merged["start_at"].isoformat(),
+            "timeZone": merged["timezone"],
+        },
+        "end": {
+            "dateTime": merged["end_at"].isoformat(),
+            "timeZone": merged["timezone"],
+        },
+    }
+    if merged.get("description") is not None:
+        body["description"] = merged["description"]
+    if merged.get("location") is not None:
+        body["location"] = merged["location"]
+    if merged.get("rrule"):
+        body["recurrence"] = [_with_rrule_prefix(merged["rrule"])]
+    return body

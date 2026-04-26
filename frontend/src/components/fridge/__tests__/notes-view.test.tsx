@@ -56,7 +56,7 @@ describe("[integration] NotesView", () => {
 
   test("error: 500 on /notes shows error banner with a retry button", async () => {
     server.use(
-      http.get(`${BACKEND}/notes`, () =>
+      http.get(`${BACKEND}/api/notes`, () =>
         HttpResponse.json({ detail: "boom" }, { status: 500 }),
       ),
     );
@@ -70,7 +70,7 @@ describe("[integration] NotesView", () => {
   test("retry: clicking Retry refetches and clears the error", async () => {
     let calls = 0;
     server.use(
-      http.get(`${BACKEND}/notes`, () => {
+      http.get(`${BACKEND}/api/notes`, () => {
         calls += 1;
         if (calls === 1)
           return HttpResponse.json({ detail: "boom" }, { status: 500 });
@@ -92,7 +92,7 @@ describe("[integration] NotesView", () => {
     // Override goes in a SECOND server.use() call so MSW prepends it and our
     // POST handler beats the default success POST handler to the request.
     server.use(
-      http.post(`${BACKEND}/notes`, async ({ request }) => {
+      http.post(`${BACKEND}/api/notes`, async ({ request }) => {
         postedBody = (await request.json()) as typeof postedBody;
         return HttpResponse.json(
           {
@@ -133,7 +133,7 @@ describe("[integration] NotesView", () => {
     let postedBody: { assignee_member_id: string | null } | null = null;
     server.use(...successHandlers({ notes: [] }));
     server.use(
-      http.post(`${BACKEND}/notes`, async ({ request }) => {
+      http.post(`${BACKEND}/api/notes`, async ({ request }) => {
         postedBody = (await request.json()) as typeof postedBody;
         return HttpResponse.json(
           {
@@ -172,7 +172,7 @@ describe("[integration] NotesView", () => {
     let patchedBody: { content?: string } | null = null;
     server.use(...successHandlers());
     server.use(
-      http.patch(`${BACKEND}/notes/n-shopping`, async ({ request }) => {
+      http.patch(`${BACKEND}/api/notes/n-shopping`, async ({ request }) => {
         patchedBody = (await request.json()) as typeof patchedBody;
         return HttpResponse.json({
           ...FIXTURE_NOTES[0],
