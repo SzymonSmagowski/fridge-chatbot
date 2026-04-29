@@ -1,11 +1,12 @@
 "use client";
 import { LogIn } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import styles from "./fridge.module.css";
+import { ConnectGoogleModal } from "./connect-google-modal";
 import { FridgeSheet } from "./sheet";
 import { initialsFromName, MEMBER_COLOR_HEX, MEMBER_COLORS, type MemberColor } from "./types";
-import { ApiError, membersApi, oauthApi, type MemberResponse } from "@/lib/api";
+import { ApiError, membersApi, type MemberResponse } from "@/lib/api";
 
 export interface AddMemberSheetProps {
   state: { mode: "create" } | { mode: "edit"; member: MemberResponse } | null;
@@ -42,6 +43,8 @@ function MemberForm({
   const [nickname, setNickname] = useState(editing?.nickname ?? "");
   const [color, setColor] = useState<MemberColor>(editing?.color ?? "sage");
   const [submitting, setSubmitting] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const onConnectModalClose = useCallback(() => setConnectOpen(false), []);
 
   const initials = initialsFromName(name);
 
@@ -72,18 +75,12 @@ function MemberForm({
     }
   };
 
-  const connectGoogle = async () => {
+  const connectGoogle = () => {
     if (!editing) {
       toast.message("Save the member first to connect Google.");
       return;
     }
-    try {
-      const res = await oauthApi.authorize(editing.id);
-      window.location.assign(res.authorize_url);
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Could not start Google flow";
-      toast.error(msg);
-    }
+    setConnectOpen(true);
   };
 
   const googleStatus = editing?.google.status;
@@ -162,7 +159,7 @@ function MemberForm({
               type="button"
               className={styles.btn}
               style={{ width: "fit-content" }}
-              onClick={() => void connectGoogle()}
+              onClick={connectGoogle}
               disabled={!editing}
             >
               <LogIn size={16} strokeWidth={2.4} />
@@ -195,6 +192,13 @@ function MemberForm({
           Save member
         </button>
       </div>
+
+      <ConnectGoogleModal
+        open={connectOpen}
+        memberId={editing?.id ?? null}
+        memberName={editing?.name ?? null}
+        onClose={onConnectModalClose}
+      />
     </>
   );
 }

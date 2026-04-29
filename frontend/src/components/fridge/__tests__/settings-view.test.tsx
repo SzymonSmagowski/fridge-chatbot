@@ -44,9 +44,9 @@ describe("[integration] SettingsView — members", () => {
   test("renders the active member list with names and Google statuses", async () => {
     server.use(...successHandlers());
     renderSettings();
-    await waitFor(() => screen.getByText("Monika"));
-    expect(screen.getByText("Szymon")).toBeInTheDocument();
-    expect(screen.getByText("Ola")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("Monika").length).toBeGreaterThan(0));
+    expect(screen.getAllByText("Szymon").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Ola").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/google synced/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/no google account yet/i)).toBeInTheDocument();
   });

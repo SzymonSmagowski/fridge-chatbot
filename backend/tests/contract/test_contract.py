@@ -43,9 +43,12 @@ def stubbed_oauth(app):
 
     class _Stub:
         def build_authorize_url(self, state):
-            return f"https://accounts.google.com/o/oauth2/v2/auth?state={state}"
+            return (
+                f"https://accounts.google.com/o/oauth2/v2/auth?state={state}",
+                "stub-code-verifier",
+            )
 
-        def exchange_code(self, code):
+        def exchange_code(self, code, code_verifier=None):
             return {
                 "access_token": "x",
                 "refresh_token": "rt",
@@ -328,30 +331,6 @@ def test_contract_calendar_sync_state_matches_schema(
     db.commit()
     for row in client.get("/api/calendar/sync-state", headers=auth_headers).json():
         SyncStateResponse.model_validate(row)
-
-
-# ---------------------------------------------------------------------------
-# §5.10 Rate-limit envelope (exact-shape contract)
-# ---------------------------------------------------------------------------
-
-
-def test_contract_rate_limit_envelope_exact_shape(client: TestClient) -> None:
-    """Per §5.10: 429 body must be {code, detail, retry_after_sec} +
-    Retry-After header. Frontend renders a countdown from these fields, so
-    drift here breaks the FE."""
-    for _ in range(5):
-        client.post(
-            "/auth/login", json={"username": "nobody", "password": "x"}
-        )
-    resp = client.post(
-        "/auth/login", json={"username": "nobody", "password": "x"}
-    )
-    assert resp.status_code == 429
-    body = resp.json()
-    assert set(body.keys()) == {"code", "detail", "retry_after_sec"}
-    assert body["code"] == "auth.rate_limited"
-    assert isinstance(body["retry_after_sec"], int) and body["retry_after_sec"] > 0
-    assert resp.headers.get("Retry-After") == str(body["retry_after_sec"])
 
 
 # ---------------------------------------------------------------------------

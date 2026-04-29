@@ -14,9 +14,9 @@ from src.core.dependencies import (
 )
 from src.core.migrations import run_alembic_upgrade
 from src.core.rate_limit import get_limiter, rate_limit_exceeded_handler
+from src.core.resource_monitor import run_resource_monitor
 from src.db.shared_engine import get_session_factory
 from src.routes import (
-    auth,
     calendar_sync,
     cars,
     events,
@@ -31,7 +31,6 @@ from src.routes import (
     users,
 )
 from src.services.langfuse_service import LangfuseService
-from src.services.langsmith_tracing import LangSmithTracing
 from src.services.logger import get_logger
 from src.services.redis_service import close_redis_client, get_redis_client
 from src.workers.calendar_sync_worker import run_polling_loop
@@ -40,13 +39,21 @@ logger = get_logger("main")
 
 _polling_task: asyncio.Task | None = None
 _polling_stop: asyncio.Event | None = None
+_resource_task: asyncio.Task | None = None
+_resource_stop: asyncio.Event | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _polling_task, _polling_stop
+    global _polling_task, _polling_stop, _resource_task, _resource_stop
 
     settings = get_settings()
+
+    if not settings.OPENAI_API_KEY:
+        logger.warning(
+            "OPENAI_API_KEY is not set — chat WS will refuse new messages with a "
+            "clear error frame until the key is configured."
+        )
 
     if settings.AUTO_MIGRATE:
         await asyncio.to_thread(run_alembic_upgrade, settings)
@@ -58,7 +65,6 @@ async def lifespan(app: FastAPI):
     db_service.init_db()
 
     LangfuseService.initialize(settings)
-    LangSmithTracing.initialize(settings)
 
     with db_service.get_db() as db:
         initialize_parent_router(settings, db)
@@ -75,6 +81,19 @@ async def lifespan(app: FastAPI):
         )
     )
 
+    if settings.BACKEND_RESOURCE_MONITOR:
+        _resource_stop = asyncio.Event()
+        _resource_task = asyncio.create_task(
+            run_resource_monitor(
+                stop_event=_resource_stop,
+                interval_seconds=settings.BACKEND_RESOURCE_MONITOR_INTERVAL_SECONDS,
+            )
+        )
+        logger.info(
+            "Resource monitor enabled — sampling every %.1fs",
+            settings.BACKEND_RESOURCE_MONITOR_INTERVAL_SECONDS,
+        )
+
     try:
         yield
     finally:
@@ -87,6 +106,18 @@ async def lifespan(app: FastAPI):
                 _polling_task.cancel()
                 try:
                     await _polling_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+
+        if _resource_stop is not None:
+            _resource_stop.set()
+        if _resource_task is not None:
+            try:
+                await asyncio.wait_for(_resource_task, timeout=1.0)
+            except asyncio.TimeoutError:
+                _resource_task.cancel()
+                try:
+                    await _resource_task
                 except (asyncio.CancelledError, Exception):  # noqa: BLE001
                     pass
 
@@ -119,11 +150,9 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     # Bare-path routers (excluded from the /api/ prefix per architecture §5.0):
-    #  - /auth/*  legacy machinery for thread FKs, JWT clients depend on it
     #  - /oauth/* Google's redirect_uri is registered without /api/
     #  - /ws/*    WebSocket convention in this codebase is no /api/ prefix
     #  - /users, /threads — pre-existing chat surface kept stable
-    app.include_router(auth.router)
     app.include_router(users.router)
     app.include_router(threads.router)
     app.include_router(oauth.router)

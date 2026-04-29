@@ -1,16 +1,17 @@
 "use client";
-import { Clock, Pencil, Plus, Star } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import styles from "./fridge.module.css";
-import { AddNoteCard } from "./add-note-card";
-import { AssigneePicker, type AssigneeSelection } from "./assignee-picker";
+import type { AssigneeSelection } from "./assignee-picker";
 import { ErrorBanner } from "./error-banner";
-import { NoteCard } from "./note-card";
+import { joinTitleAndBody } from "./notes-content";
+import { NoteEditorPane } from "./note-editor-pane";
+import { NotesHeroStrip } from "./notes-hero-strip";
+import { NotesListPane } from "./notes-list-pane";
 import { NotesSkeleton } from "./notes-skeleton";
 import { TabHeader } from "./tab-header";
+import { useNoteAutosave } from "./use-note-autosave";
 import { WeatherChip } from "./weather-chip";
-import { toggleChecklistAt } from "./shopping-checklist";
 import { useFamilyEvents } from "@/lib/use-family-events";
 import {
   ApiError,
@@ -38,9 +39,21 @@ function greeting(): string {
 export function NotesView({ members, cars }: NotesViewProps) {
   const [notes, setNotes] = useState<NoteResponse[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<AssigneeSelection>({ kind: "family-wide" });
-  const [quickInput, setQuickInput] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
+  const creatingRef = useRef(false);
+
+  const sortedNotes = useMemo(() => {
+    if (!notes) return [];
+    return notes
+      .slice()
+      .sort(
+        (a, b) =>
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+      );
+  }, [notes]);
+
+  const heroNotes = useMemo(() => sortedNotes.slice(0, 2), [sortedNotes]);
 
   const fetchNotes = useCallback(async () => {
     try {
@@ -54,61 +67,188 @@ export function NotesView({ members, cars }: NotesViewProps) {
   }, []);
 
   useEffect(() => {
-    // Fetch-on-mount + refetch when filters change. setState happens inside the
-    // awaited callback, not in the effect body — known false positive of the
-    // React 19 `react-hooks/set-state-in-effect` rule for this idiom.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchNotes();
   }, [fetchNotes]);
 
   useFamilyEvents(fetchNotes);
 
-  const pinned = useMemo(() => notes?.filter((n) => n.pinned) ?? [], [notes]);
-  const recent = useMemo(() => notes?.filter((n) => !n.pinned) ?? [], [notes]);
+  const autosave = useNoteAutosave({
+    onSaved: (next) => {
+      setNotes((prev) =>
+        prev ? prev.map((n) => (n.id === next.id ? next : n)) : prev,
+      );
+    },
+    onError: () => toast.error(m.errors_update_note_failed()),
+  });
 
-  const handleQuickAdd = async () => {
-    const text = quickInput.trim();
-    if (!text || submitting) return;
-    setSubmitting(true);
+  const selected = useMemo(
+    () => sortedNotes.find((n) => n.id === selectedId) ?? null,
+    [sortedNotes, selectedId],
+  );
+
+  // Track the latest local content of the open note so we can detect "empty"
+  // on close without waiting for the in-flight PATCH to settle.
+  const localContentRef = useRef<{ id: string; content: string } | null>(null);
+
+  const handleEditorChange = useCallback(
+    (next: { title: string; body: string }) => {
+      if (!selected) return;
+      const content = joinTitleAndBody(next);
+      localContentRef.current = { id: selected.id, content };
+      // Optimistic list update.
+      setNotes((prev) =>
+        prev
+          ? prev.map((n) =>
+              n.id === selected.id
+                ? { ...n, content, updated_at: new Date().toISOString() }
+                : n,
+            )
+          : prev,
+      );
+      autosave.schedule(selected.id, { content });
+    },
+    [autosave, selected],
+  );
+
+  const handleAssigneeChange = useCallback(
+    (next: AssigneeSelection) => {
+      if (!selected) return;
+      const assignee_member_id = next.kind === "member" ? next.id : null;
+      setNotes((prev) =>
+        prev
+          ? prev.map((n) =>
+              n.id === selected.id ? { ...n, assignee_member_id } : n,
+            )
+          : prev,
+      );
+      autosave.schedule(selected.id, { assignee_member_id });
+    },
+    [autosave, selected],
+  );
+
+  const handleCarToggle = useCallback(
+    (carId: string) => {
+      if (!selected) return;
+      const has = selected.car_ids.includes(carId);
+      const car_ids = has
+        ? selected.car_ids.filter((c) => c !== carId)
+        : [...selected.car_ids, carId];
+      setNotes((prev) =>
+        prev
+          ? prev.map((n) => (n.id === selected.id ? { ...n, car_ids } : n))
+          : prev,
+      );
+      autosave.schedule(selected.id, { car_ids });
+    },
+    [autosave, selected],
+  );
+
+  // Apple-Notes flow: Add → create empty note → focus title.
+  const handleCreate = useCallback(async () => {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    autosave.cancel();
+    // Empty-note cleanup before opening a new one.
+    await maybeDeleteIfEmpty();
     try {
-      const created = await notesApi.create({
-        content: text,
-        assignee_member_id: selected.kind === "member" ? selected.id : null,
-      });
+      const created = await notesApi.create({ content: "" });
       setNotes((prev) => (prev ? [created, ...prev] : [created]));
-      setQuickInput("");
+      setSelectedId(created.id);
+      setJustCreatedId(created.id);
+      localContentRef.current = { id: created.id, content: "" };
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : m.errors_add_note_failed();
       toast.error(msg);
     } finally {
-      setSubmitting(false);
+      creatingRef.current = false;
     }
-  };
+    // maybeDeleteIfEmpty needs to be in scope; defined below via closure trick.
+    async function maybeDeleteIfEmpty() {
+      const local = localContentRef.current;
+      if (!local) return;
+      // Only kill notes that are still empty AND were freshly created.
+      if (local.content.trim().length > 0) return;
+      const target = notes?.find((n) => n.id === local.id);
+      if (!target) return;
+      // Don't delete the special shopping note.
+      if (target.labels.some((l) => l.slug === SHOPPING_LIST_SLUG)) return;
+      try {
+        await notesApi.delete(local.id);
+        setNotes((prev) => (prev ? prev.filter((n) => n.id !== local.id) : prev));
+      } catch {
+        // best-effort cleanup
+      }
+      localContentRef.current = null;
+    }
+  }, [autosave, notes]);
 
-  const handleToggleChecklist = async (noteId: string, itemIndex: number) => {
-    const target = notes?.find((n) => n.id === noteId);
-    if (!target) return;
-    const nextContent = toggleChecklistAt(target.content, itemIndex);
-    // Optimistic update
-    setNotes((prev) =>
-      prev
-        ? prev.map((n) => (n.id === noteId ? { ...n, content: nextContent } : n))
-        : prev,
-    );
+  const handleCreateShoppingList = useCallback(async () => {
     try {
-      const updated = await notesApi.update(noteId, { content: nextContent });
-      setNotes((prev) =>
-        prev ? prev.map((n) => (n.id === noteId ? updated : n)) : prev,
-      );
+      const created = await notesApi.create({
+        content: "",
+        label_slugs: [SHOPPING_LIST_SLUG],
+        pinned: true,
+      });
+      setNotes((prev) => (prev ? [created, ...prev] : [created]));
+      setSelectedId(created.id);
     } catch (err) {
-      // Revert
-      setNotes((prev) =>
-        prev ? prev.map((n) => (n.id === noteId ? target : n)) : prev,
-      );
-      const msg = err instanceof ApiError ? err.message : m.errors_update_note_failed();
+      const msg = err instanceof ApiError ? err.message : m.errors_add_note_failed();
       toast.error(msg);
     }
-  };
+  }, []);
+
+  const cleanupEmptyOpenNote = useCallback(async () => {
+    const local = localContentRef.current;
+    if (!local) return;
+    if (local.content.trim().length > 0) return;
+    const target = notes?.find((n) => n.id === local.id);
+    if (!target) return;
+    if (target.labels.some((l) => l.slug === SHOPPING_LIST_SLUG)) return;
+    try {
+      await notesApi.delete(local.id);
+      setNotes((prev) => (prev ? prev.filter((n) => n.id !== local.id) : prev));
+    } catch {
+      // best-effort
+    }
+    localContentRef.current = null;
+  }, [notes]);
+
+  const handleSelect = useCallback(
+    async (id: string) => {
+      if (id === selectedId) return;
+      autosave.cancel();
+      await cleanupEmptyOpenNote();
+      setSelectedId(id);
+      setJustCreatedId(null);
+      const target = notes?.find((n) => n.id === id);
+      if (target) localContentRef.current = { id, content: target.content };
+    },
+    [autosave, cleanupEmptyOpenNote, notes, selectedId],
+  );
+
+  const handleDelete = useCallback(async () => {
+    if (!selected) return;
+    if (selected.labels.some((l) => l.slug === SHOPPING_LIST_SLUG)) return;
+    autosave.cancel();
+    const id = selected.id;
+    setNotes((prev) => (prev ? prev.filter((n) => n.id !== id) : prev));
+    setSelectedId(null);
+    localContentRef.current = null;
+    try {
+      await notesApi.delete(id);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : m.errors_update_note_failed();
+      toast.error(msg);
+      void fetchNotes();
+    }
+  }, [autosave, fetchNotes, selected]);
+
+  const hasShoppingList = useMemo(
+    () =>
+      sortedNotes.some((n) => n.labels.some((l) => l.slug === SHOPPING_LIST_SLUG)),
+    [sortedNotes],
+  );
 
   const isLoading = notes === null && !error;
   const isEmpty = notes !== null && notes.length === 0;
@@ -126,99 +266,50 @@ export function NotesView({ members, cars }: NotesViewProps) {
         right={<WeatherChip />}
       />
 
-      <div className={styles.viewScroll}>
-        <div className={styles.notesToolbar}>
-          <Pencil
-            size={22}
-            strokeWidth={2}
-            style={{ color: "var(--muted-fg)", marginLeft: 8 }}
-            aria-hidden="true"
-          />
-          <input
-            className={styles.quickInput}
-            placeholder={m.notes_quick_add_placeholder()}
-            value={quickInput}
-            onChange={(e) => setQuickInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleQuickAdd();
-            }}
-            aria-label={m.notes_quick_add_aria()}
-            disabled={submitting}
-          />
-          <AssigneePicker
-            members={members}
-            selected={selected}
-            onSelect={setSelected}
-          />
-          <button
-            type="button"
-            className={`${styles.btn} ${styles.btnPrimaryCompact}`}
-            onClick={() => void handleQuickAdd()}
-            disabled={submitting || !quickInput.trim()}
-          >
-            <Plus size={18} strokeWidth={2.4} />
-            {m.notes_add_button()}
-          </button>
-        </div>
-
-        {error ? <ErrorBanner message={error} onRetry={() => void fetchNotes()} /> : null}
+      <div className={styles.notesScroll}>
+        {error ? (
+          <ErrorBanner message={error} onRetry={() => void fetchNotes()} />
+        ) : null}
 
         {isLoading ? (
-          <>
-            <SectionLabel
-              title={m.notes_section_pinned()}
-              count={0}
-              icon={<Star size={14} fill="currentColor" strokeWidth={0} />}
-            />
-            <NotesSkeleton count={4} />
-          </>
+          <NotesSkeleton count={4} />
         ) : isEmpty ? (
-          <EmptyBoard onAddFirst={() => void handleQuickAdd()} />
+          <EmptyBoard onAddFirst={() => void handleCreate()} />
         ) : (
           <>
-            <NotesSection
-              title={m.notes_section_pinned()}
-              count={pinned.length}
-              icon={<Star size={14} fill="currentColor" strokeWidth={0} />}
-            >
-              {pinned.length === 0 ? (
-                <EmptyInline label={m.notes_empty_pinned()} />
-              ) : (
-                <div className={styles.notesGrid}>
-                  {pinned.map((n, i) => (
-                    <NoteCard
-                      key={n.id}
-                      note={n}
-                      members={members}
-                      cars={cars}
-                      cardIndex={i}
-                      span={n.labels.some((l) => l.slug === SHOPPING_LIST_SLUG) ? 2 : 1}
-                      onToggleChecklist={(id, idx) => void handleToggleChecklist(id, idx)}
-                    />
-                  ))}
-                </div>
-              )}
-            </NotesSection>
+            <NotesHeroStrip
+              notes={heroNotes}
+              selectedId={selectedId}
+              onOpen={(id) => void handleSelect(id)}
+            />
 
-            <NotesSection
-              title={m.notes_section_recent()}
-              count={recent.length}
-              icon={<Clock size={14} strokeWidth={2.5} />}
-            >
-              <div className={styles.notesGrid}>
-                {recent.map((n, i) => (
-                  <NoteCard
-                    key={n.id}
-                    note={n}
+            <div className={styles.notesWorkspace}>
+              <NotesListPane
+                notes={sortedNotes}
+                selectedId={selectedId}
+                hasShoppingList={hasShoppingList}
+                onSelect={(id) => void handleSelect(id)}
+                onCreate={() => void handleCreate()}
+                onCreateShoppingList={() => void handleCreateShoppingList()}
+              />
+
+              <div className={styles.notesEditorWrap}>
+                {selected ? (
+                  <NoteEditorPane
+                    note={selected}
                     members={members}
                     cars={cars}
-                    cardIndex={i}
-                    onToggleChecklist={(id, idx) => void handleToggleChecklist(id, idx)}
+                    isJustCreated={selected.id === justCreatedId}
+                    onChange={handleEditorChange}
+                    onAssigneeChange={handleAssigneeChange}
+                    onCarToggle={handleCarToggle}
+                    onDelete={() => void handleDelete()}
                   />
-                ))}
-                <AddNoteCard onClick={() => document.querySelector<HTMLInputElement>(`.${styles.quickInput}`)?.focus()} />
+                ) : (
+                  <EditorPlaceholder onCreate={() => void handleCreate()} />
+                )}
               </div>
-            </NotesSection>
+            </div>
           </>
         )}
       </div>
@@ -226,57 +317,24 @@ export function NotesView({ members, cars }: NotesViewProps) {
   );
 }
 
-function SectionLabel({
-  title,
-  count,
-  icon,
-}: {
-  title: string;
-  count: number;
-  icon: React.ReactNode;
-}) {
+function EditorPlaceholder({ onCreate }: { onCreate: () => void }) {
   return (
-    <div className={styles.sectionLabel}>
-      <span aria-hidden="true">{icon}</span>
-      {title}
-      <span className={styles.sectionCount}>{count}</span>
-      <div className={styles.sectionDivider} />
-    </div>
-  );
-}
-
-function NotesSection({
-  title,
-  count,
-  icon,
-  children,
-}: {
-  title: string;
-  count: number;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <>
-      <SectionLabel title={title} count={count} icon={icon} />
-      {children}
-    </>
-  );
-}
-
-function EmptyInline({ label }: { label: string }) {
-  return (
-    <div
-      style={{
-        padding: 24,
-        borderRadius: "var(--radius-card)",
-        border: "2px dashed var(--border-color, #E8E0D4)",
-        color: "var(--muted-fg)",
-        textAlign: "center",
-        marginBottom: 24,
-      }}
-    >
-      {label}
+    <div className={styles.notesEditorPlaceholder}>
+      <div className={styles.notesEditorPlaceholderInner}>
+        <div className={styles.notesEditorPlaceholderTitle}>
+          {m.notes_editor_placeholder_title()}
+        </div>
+        <p className={styles.notesEditorPlaceholderHint}>
+          {m.notes_editor_placeholder_hint()}
+        </p>
+        <button
+          type="button"
+          className={`${styles.btn} ${styles.btnPrimary}`}
+          onClick={onCreate}
+        >
+          {m.notes_editor_placeholder_button()}
+        </button>
+      </div>
     </div>
   );
 }

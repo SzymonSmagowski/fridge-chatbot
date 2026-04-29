@@ -33,7 +33,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "npm run dev",
-    url: "http://localhost:3000/login",
+    url: "http://localhost:3000/pair",
     reuseExistingServer: true,
     timeout: 120_000,
     stdout: "ignore",

@@ -13,12 +13,6 @@ export interface UserPublic extends UserResponse {
   is_active: boolean;
 }
 
-export interface TokenWithUser {
-  access_token: string;
-  token_type: string;
-  user: UserResponse;
-}
-
 export interface ThreadResponse {
   id: number;
   thread_id: string;
@@ -93,30 +87,6 @@ async function api<T>(
 }
 
 export const apiClient = {
-  register: (username: string, password: string, email?: string) =>
-    api<TokenWithUser>(
-      "/auth/register",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          username,
-          password,
-          ...(email ? { email } : {}),
-        }),
-      },
-      { auth: false },
-    ),
-
-  login: (username: string, password: string) =>
-    api<TokenWithUser>(
-      "/auth/login",
-      {
-        method: "POST",
-        body: JSON.stringify({ username, password }),
-      },
-      { auth: false },
-    ),
-
   me: () => api<UserPublic>("/users/me"),
 
   listThreads: () => api<ThreadResponse[]>("/threads"),

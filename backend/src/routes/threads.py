@@ -26,7 +26,7 @@ from src.schemas.threads import (
 from src.services.logger import get_logger
 
 router = APIRouter(tags=["threads"])
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/pairing/start")
 logger = get_logger("threads_route")
 
 
@@ -222,11 +222,19 @@ async def chat_websocket(
             await safe_send({"error": "Not authorized to access this thread"})
             return
 
+        settings = get_settings()
+        if not settings.OPENAI_API_KEY:
+            await safe_send({
+                "type": "error_notification",
+                "message": "OPENAI_API_KEY not configured on the backend.",
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+            return
+
         await safe_send({"status": "processing"})
 
         # Build a ChatStreamer for the publish-side of §7.7. Subscriber-side
         # WS multiplexing remains a future addition; protocol unchanged today.
-        settings = get_settings()
         chat_streamer = ChatStreamer(get_redis_client(settings))
 
         async def on_chunk(data: dict) -> None:

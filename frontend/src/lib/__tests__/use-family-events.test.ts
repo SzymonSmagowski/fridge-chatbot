@@ -132,7 +132,7 @@ describe("[unit] useFamilyEvents — websocket lifecycle", () => {
     expect(sockets.length).toBe(2);
   });
 
-  test("on close 4003 family_mismatch — clears token and redirects to /login", () => {
+  test("on close 4003 family_mismatch — clears token and redirects to /pair", () => {
     saveToken(makeFamilyJwt("stale-family"));
     const assignSpy = vi.fn();
     Object.defineProperty(window, "location", {
@@ -142,7 +142,7 @@ describe("[unit] useFamilyEvents — websocket lifecycle", () => {
     renderHook(() => useFamilyEvents(() => undefined));
     act(() => sockets[0].__dispatchClose(4003));
     expect(getToken()).toBeNull();
-    expect(assignSpy).toHaveBeenCalledWith("/login");
+    expect(assignSpy).toHaveBeenCalledWith("/pair");
   });
 
   test("on close 1011 redis_unavailable — waits 10s before reconnecting", () => {

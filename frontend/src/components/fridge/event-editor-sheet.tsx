@@ -21,6 +21,8 @@ export interface EventEditorSheetProps {
   event: EventResponse | null;
   members: MemberResponse[];
   cars: CarResponse[];
+  /** Pre-fill start time when creating a new event (e.g. clicked a time slot). */
+  defaultStart?: Date | null;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -68,10 +70,11 @@ export function EventEditorSheet({
   event,
   members,
   cars,
+  defaultStart,
   onClose,
   onSaved,
 }: EventEditorSheetProps) {
-  const key = event?.id ?? (open ? "new" : "closed");
+  const key = event?.id ?? (open ? `new-${defaultStart?.getTime() ?? "now"}` : "closed");
   return (
     <FridgeSheet
       open={open}
@@ -83,6 +86,7 @@ export function EventEditorSheet({
         event={event}
         members={members}
         cars={cars}
+        defaultStart={defaultStart ?? null}
         onClose={onClose}
         onSaved={onSaved}
       />
@@ -94,17 +98,21 @@ function EventForm({
   event,
   members,
   cars,
+  defaultStart,
   onClose,
   onSaved,
 }: {
   event: EventResponse | null;
   members: MemberResponse[];
   cars: CarResponse[];
+  defaultStart: Date | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const isNew = !event;
-  const initialStart = event ? new Date(event.start_at) : new Date();
+  const initialStart = event
+    ? new Date(event.start_at)
+    : defaultStart ?? new Date();
   const initialEnd = event
     ? new Date(event.end_at)
     : new Date(initialStart.getTime() + 60 * 60 * 1000);

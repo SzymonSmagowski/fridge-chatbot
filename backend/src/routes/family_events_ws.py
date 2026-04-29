@@ -152,8 +152,22 @@ async def _heartbeat(websocket: WebSocket) -> None:
 async def _safe_close(
     websocket: WebSocket, *, code: int = 1000, reason: str = ""
 ) -> None:
+    """Best-effort close. Swallows every exception by design.
+
+    Cleanup paths reach this function from `finally` blocks where the socket
+    might already be torn down, in which case calling close() raises:
+      - `RuntimeError` if starlette already saw a disconnect
+      - `AttributeError: 'WebSocketProtocol' object has no attribute
+        'transfer_data_task'` when uvicorn's legacy `websockets_impl` adapter
+        races a close against a connection that was never fully wired
+        (mismatch between uvicorn's adapter and `websockets >= 13` internals).
+    Either way, the socket is gone — re-raising would just spam logs.
+    """
+    from starlette.websockets import WebSocketState
+
+    if websocket.application_state == WebSocketState.DISCONNECTED:
+        return
     try:
         await websocket.close(code=code, reason=reason)
-    except RuntimeError:
-        # Already closed.
-        pass
+    except Exception as exc:  # noqa: BLE001 — best-effort by contract
+        logger.debug("ignored error while closing family-events ws: %s", exc)

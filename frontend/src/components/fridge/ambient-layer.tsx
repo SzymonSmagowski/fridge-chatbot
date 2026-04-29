@@ -1,12 +1,39 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import styles from "./fridge.module.css";
 
 /**
  * Animated ambient layer behind every view. Drifting blobs + sunbeam + motes.
- * Honors prefers-reduced-motion via the CSS module rule.
+ * Honors `prefers-reduced-motion` via the CSS module rule.
+ *
+ * Local opt-out: set `localStorage.liteAmbient = "1"` and reload — the whole
+ * layer skips rendering. Useful on Codespaces / weak hardware where the
+ * software-rasterized blur+blend cost is what's pinning a CPU core. Production
+ * is unaffected (no flag set → default rich layer).
  */
+const LITE_AMBIENT_KEY = "liteAmbient";
+
+function subscribeLiteAmbient(callback: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handler = (e: StorageEvent) => {
+    if (e.key === LITE_AMBIENT_KEY) callback();
+  };
+  window.addEventListener("storage", handler);
+  return () => window.removeEventListener("storage", handler);
+}
+function getLiteAmbient(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage?.getItem(LITE_AMBIENT_KEY) === "1";
+}
+
 export function AmbientLayer() {
+  const lite = useSyncExternalStore(
+    subscribeLiteAmbient,
+    getLiteAmbient,
+    () => false, // SSR snapshot — render nothing during hydration mismatch window
+  );
+  if (lite) return null;
+
   return (
     <>
       <div className={styles.ambient} aria-hidden="true">

@@ -316,7 +316,7 @@ export function successHandlers(opts?: {
     http.delete(`${BACKEND}/api/notes/:id`, () => new HttpResponse(null, { status: 204 })),
 
     http.get(`${BACKEND}/api/events`, () =>
-      HttpResponse.json<EventListResponse>({ items: events, total: events.length }),
+      HttpResponse.json<EventListResponse>({ fridge: events, external: [], total: events.length }),
     ),
     http.post(`${BACKEND}/api/events`, async ({ request }) => {
       const body = (await request.json()) as Partial<EventResponse> & { title: string };

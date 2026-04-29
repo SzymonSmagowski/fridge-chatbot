@@ -13,7 +13,6 @@ export type {
   MessageResponse,
   ThreadMessagesResponse,
   ThreadResponse,
-  TokenWithUser,
   UserPublic,
   UserResponse,
 } from "./_legacy";
@@ -74,6 +73,7 @@ export type {
   EventSyncStatus,
   EventTargetView,
   EventUpdateRequest,
+  ExternalEventResponse,
 } from "./events";
 
 export { calendarSyncApi } from "./calendar-sync";

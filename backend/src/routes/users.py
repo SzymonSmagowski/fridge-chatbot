@@ -6,7 +6,7 @@ from src.core.dependencies import get_auth_service, get_db
 from src.schemas.users import UserPublic
 
 router = APIRouter(prefix="/users", tags=["users"])
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/pairing/start")
 
 
 @router.get("/me", response_model=UserPublic)

@@ -11,10 +11,10 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Calendar tab", () => {
-  test("[e2e] Calendar: renders week strip and empty state when no events", async ({ page }) => {
+  test("[e2e] Calendar: renders the time grid", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("tab", { name: /calendar/i }).click();
-    await expect(page.getByText(/no events this week/i)).toBeVisible();
+    await expect(page.getByLabel(/time grid/i)).toBeVisible();
   });
 
   test("[e2e] Calendar: new-event sheet opens, title required, save triggers POST", async ({ page }) => {
@@ -54,13 +54,12 @@ test.describe("Calendar tab", () => {
     await expect(sheet.getByText(/doesn't have google connected/i)).toBeVisible();
   });
 
-  test("[e2e] Calendar: prev/next week buttons move the anchor", async ({ page }) => {
+  test("[e2e] Calendar: prev/next buttons move the anchor", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("tab", { name: /calendar/i }).click();
-    const header = page.getByText(/this week · [a-z]{3} \d{1,2}–[a-z]{3} \d{1,2}/i);
+    const header = page.getByText(/this week · /i);
     const initial = await header.innerText();
     await page.getByRole("button", { name: /next week/i }).click();
-    // The header changes — we don't assert exact dates, just inequality.
     await expect.poll(async () => await header.innerText()).not.toBe(initial);
   });
 

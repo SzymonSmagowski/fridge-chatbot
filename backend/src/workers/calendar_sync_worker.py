@@ -51,6 +51,7 @@ async def run_polling_loop(
     calendar = GoogleCalendarService()
 
     interval = settings.SYNC_INTERVAL_SEC_DEFAULT
+    logger.info("calendar polling loop started (interval=%ds)", interval)
     while not stop_event.is_set():
         try:
             with session_factory() as db:
@@ -64,6 +65,8 @@ async def run_polling_loop(
                     .all()
                 )
 
+            ok = 0
+            failed = 0
             for member in members:
                 try:
                     await _pull_member(
@@ -75,8 +78,16 @@ async def run_polling_loop(
                         crypto=crypto,
                         calendar=calendar,
                     )
+                    ok += 1
                 except Exception as exc:  # noqa: BLE001 — never let one member break the loop
+                    failed += 1
                     logger.warning("pull_member failed for %s: %s", member.id, exc)
+            if members:
+                logger.info(
+                    "calendar polling iteration: %d members ok, %d failed",
+                    ok,
+                    failed,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.error("polling loop iteration failed: %s", exc, exc_info=True)
 

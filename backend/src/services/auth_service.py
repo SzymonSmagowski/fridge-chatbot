@@ -15,23 +15,15 @@ class AuthService:
     def __init__(self, settings: Settings):
         self.secret_key = settings.SECRET_KEY
         self.algorithm = settings.JWT_ALGORITHM
-        self.access_token_expire_minutes = settings.ACCESS_TOKEN_EXPIRE_MINUTES
         self.device_token_expire_days = settings.DEVICE_TOKEN_EXPIRE_DAYS
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-    # TODO(compliance): Pinned bcrypt<5 in pyproject.toml due to passlib's
-    # `bcrypt.__about__` probe incompatibility. When moving to passlib 1.8+
-    # or replacing with argon2-cffi, the bcrypt pin can be removed.
+    # Used by the OAuth pair callback to populate the NOT NULL `users.hashed_password`
+    # column for the device's shadow user. The shadow user is never logged in via
+    # password (legacy /auth/* is gone) — this hash exists only to satisfy the
+    # column constraint until the column is dropped in a follow-up migration.
     def get_password_hash(self, password: str) -> str:
         return self.pwd_context.hash(password)
-
-    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        return self.pwd_context.verify(plain_password, hashed_password)
-
-    def create_access_token(self, data: dict) -> str:
-        expires = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
-        payload = {**data, "exp": expires}
-        return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
 
     # --- device JWT (D1) -----------------------------------------------------
     def create_device_token(self, device_id: UUID, family_id: UUID) -> str:
@@ -67,26 +59,19 @@ class AuthService:
         except PyJWTError as exc:
             raise credentials_exception from exc
 
-        if payload.get("typ") == "device":
-            # Device JWT — resolve the shadow user attached to this device so
-            # legacy /threads endpoints continue to work.
-            from src.models import Device
-
-            device_id = payload.get("sub")
-            if not device_id:
-                raise credentials_exception
-            device = db.query(Device).filter(Device.id == device_id).first()
-            if not device or not device.shadow_user_id:
-                raise credentials_exception
-            user = db.query(User).filter(User.id == device.shadow_user_id).first()
-            if not user:
-                raise credentials_exception
-            return user
-
-        username = payload.get("sub")
-        if not username:
+        if payload.get("typ") != "device":
+            # Only device JWTs are accepted now — username/password tokens are gone.
             raise credentials_exception
-        user = db.query(User).filter(User.username == username).first()
-        if not user or not user.is_active:
+
+        from src.models import Device
+
+        device_id = payload.get("sub")
+        if not device_id:
+            raise credentials_exception
+        device = db.query(Device).filter(Device.id == device_id).first()
+        if not device or not device.shadow_user_id:
+            raise credentials_exception
+        user = db.query(User).filter(User.id == device.shadow_user_id).first()
+        if not user:
             raise credentials_exception
         return user

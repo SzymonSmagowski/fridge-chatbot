@@ -70,10 +70,6 @@ export function PairingScreen() {
           </button>
 
           <p className={pairing.hint}>{m.pairing_redirect_hint()}</p>
-
-          <a className={pairing.escapeLink} href="/login">
-            {m.pairing_back_to_login()}
-          </a>
         </div>
       </main>
     </div>

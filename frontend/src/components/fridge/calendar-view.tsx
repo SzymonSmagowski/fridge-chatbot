@@ -1,7 +1,6 @@
 "use client";
-import { ChevronLeft, ChevronRight, Link2, MapPin, Plus, Repeat } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
+import { ChevronLeft, ChevronRight, Filter, Plus } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import styles from "./fridge.module.css";
 import { CarAvatar } from "./car-avatar";
 import { ErrorBanner } from "./error-banner";
@@ -12,16 +11,19 @@ import { initialsFromName, type MemberColor } from "./types";
 import { useFamilyEvents } from "@/lib/use-family-events";
 import {
   ApiError,
-  calendarSyncApi,
   eventsApi,
   type CarResponse,
   type EventResponse,
+  type ExternalEventResponse,
   type MemberResponse,
-  type SyncStateResponse,
 } from "@/lib/api";
 import { m } from "@/paraglide/messages.js";
 import { formatDateTime } from "@/lib/intl";
 import { getCurrentLocale } from "@/lib/i18n";
+
+const HOUR_HEIGHT = 56;
+const SLOT_MINUTES = 30;
+const DEFAULT_SCROLL_HOUR = 7;
 
 function weekdayShortLabels(): string[] {
   return [
@@ -41,26 +43,44 @@ interface DayInfo {
   dow: string;
   dom: number;
   isToday: boolean;
-  dots: MemberColor[];
 }
 
-function buildWeek(anchor: Date): DayInfo[] {
-  const start = new Date(anchor);
-  const dayOfWeek = (start.getDay() + 6) % 7; // Mon=0
-  start.setDate(start.getDate() - dayOfWeek);
-  start.setHours(0, 0, 0, 0);
+function startOfDay(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+// Local-date key (YYYY-MM-DD in the user's timezone). Using toISOString()
+// here would silently bucket events into the wrong day for any user not in
+// UTC, since the server returns UTC ISO timestamps.
+function localDateKey(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = (d.getMonth() + 1).toString().padStart(2, "0");
+  const dd = d.getDate().toString().padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function buildVisibleDays(anchor: Date, span: 1 | 3 | 7): DayInfo[] {
   const today = new Date();
   const weekdays = weekdayShortLabels();
-  return Array.from({ length: 7 }).map((_, i) => {
+  const start = startOfDay(anchor);
+  if (span === 7) {
+    const dayOfWeek = (start.getDay() + 6) % 7;
+    start.setDate(start.getDate() - dayOfWeek);
+  } else if (span === 3) {
+    start.setDate(start.getDate() - 1);
+  }
+  return Array.from({ length: span }).map((_, i) => {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
+    const dowIndex = (d.getDay() + 6) % 7;
     return {
-      iso: d.toISOString().slice(0, 10),
+      iso: localDateKey(d),
       date: d,
-      dow: weekdays[i],
+      dow: weekdays[dowIndex],
       dom: d.getDate(),
       isToday: d.toDateString() === today.toDateString(),
-      dots: [],
     };
   });
 }
@@ -71,8 +91,8 @@ function railColorForEvent(
 ): MemberColor | "family" {
   if (event.assignee_member_id == null && event.car_ids.length === 0) return "family";
   if (event.assignee_member_id) {
-    const m = members.find((x) => x.id === event.assignee_member_id);
-    return m?.color ?? "stone";
+    const found = members.find((x) => x.id === event.assignee_member_id);
+    return found?.color ?? "stone";
   }
   return "family";
 }
@@ -94,23 +114,33 @@ function railClass(color: MemberColor | "family"): string {
   }
 }
 
-function formatTime(d: Date): { time: string; meridiem: string } {
-  // Polish uses 24h with no meridiem; English uses 12h + AM/PM.
-  const hours = d.getHours();
-  const minutes = d.getMinutes().toString().padStart(2, "0");
+function formatHour(h: number): string {
   if (getCurrentLocale() === "pl") {
-    return { time: `${hours}:${minutes}`, meridiem: "" };
+    return `${h.toString().padStart(2, "0")}:00`;
   }
-  const displayHour = ((hours + 11) % 12) + 1;
-  const meridiem = hours >= 12 ? "PM" : "AM";
-  return { time: `${displayHour}:${minutes}`, meridiem };
+  if (h === 0) return "12 AM";
+  if (h === 12) return "12 PM";
+  if (h < 12) return `${h} AM`;
+  return `${h - 12} PM`;
 }
 
-function durationLabel(start: Date, end: Date): string {
-  const ms = end.getTime() - start.getTime();
-  const h = ms / 3_600_000;
-  if (h >= 1) return `${h % 1 === 0 ? h : h.toFixed(1)}h`;
-  return `${Math.round(ms / 60_000)}m`;
+function formatTimeShort(d: Date): string {
+  const hh = d.getHours();
+  const mm = d.getMinutes().toString().padStart(2, "0");
+  if (getCurrentLocale() === "pl") {
+    return `${hh.toString().padStart(2, "0")}:${mm}`;
+  }
+  const meridiem = hh >= 12 ? "PM" : "AM";
+  const display = ((hh + 11) % 12) + 1;
+  return `${display}:${mm} ${meridiem}`;
+}
+
+function minutesFromMidnight(d: Date): number {
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function clampPositive(n: number): number {
+  return n < 0 ? 0 : n;
 }
 
 export interface CalendarViewProps {
@@ -118,20 +148,29 @@ export interface CalendarViewProps {
   cars: CarResponse[];
 }
 
+type Span = 1 | 3 | 7;
+
+function defaultSpan(): Span {
+  if (typeof window === "undefined") return 3;
+  return window.innerWidth < 900 ? 3 : 7;
+}
+
 export function CalendarView({ members, cars }: CalendarViewProps) {
   const [anchor, setAnchor] = useState<Date>(() => new Date());
+  const [span, setSpan] = useState<Span>(() => defaultSpan());
   const [events, setEvents] = useState<EventResponse[] | null>(null);
-  const [syncStates, setSyncStates] = useState<SyncStateResponse[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<EventResponse | null>(null);
+  const [editorDefaultStart, setEditorDefaultStart] = useState<Date | null>(null);
 
+  const [filterOpen, setFilterOpen] = useState(false);
   const [filterOverrides, setFilterOverrides] = useState<Record<string, boolean>>({});
   const filters = useMemo(() => {
     const next: Record<string, boolean> = { cars: filterOverrides.cars ?? true };
-    members.forEach((m) => {
-      next[m.id] = filterOverrides[m.id] ?? true;
+    members.forEach((mem) => {
+      next[mem.id] = filterOverrides[mem.id] ?? true;
     });
     return next;
   }, [members, filterOverrides]);
@@ -139,28 +178,53 @@ export function CalendarView({ members, cars }: CalendarViewProps) {
     (updater: (prev: Record<string, boolean>) => Record<string, boolean>) => {
       setFilterOverrides((prev) => {
         const previousFull: Record<string, boolean> = { cars: prev.cars ?? true };
-        members.forEach((m) => {
-          previousFull[m.id] = prev[m.id] ?? true;
+        members.forEach((mem) => {
+          previousFull[mem.id] = prev[mem.id] ?? true;
         });
-        const next = updater(previousFull);
-        return next;
+        return updater(previousFull);
       });
     },
     [members],
   );
 
-  const week = useMemo(() => buildWeek(anchor), [anchor]);
-  const fromIso = useMemo(() => week[0].date.toISOString(), [week]);
+  const days = useMemo(() => buildVisibleDays(anchor, span), [anchor, span]);
+  const fromIso = useMemo(() => days[0].date.toISOString(), [days]);
   const toIso = useMemo(() => {
-    const last = new Date(week[6].date);
+    const last = new Date(days[days.length - 1].date);
     last.setHours(23, 59, 59, 999);
     return last.toISOString();
-  }, [week]);
+  }, [days]);
 
   const fetchEvents = useCallback(async () => {
     try {
       const res = await eventsApi.list({ from: fromIso, to: toIso });
-      setEvents(res.items);
+      // Backend returns fridge[] + external[] separately (different shapes).
+      // External events get projected to EventResponse-shaped rows so the
+      // existing time-grid render path treats them uniformly. assignee_member_id
+      // is set to the source member so they color-code by whose calendar they
+      // came from.
+      const externalAsEvents: EventResponse[] = res.external.map(
+        (ext: ExternalEventResponse): EventResponse => ({
+          id: ext.id,
+          family_id: ext.family_id,
+          title: ext.title || "(untitled)",
+          description: ext.description,
+          start_at: ext.start_at,
+          end_at: ext.end_at,
+          timezone: "",
+          location: ext.location,
+          assignee_member_id: ext.member_id,
+          car_ids: [],
+          rrule: ext.rrule,
+          source: "external",
+          source_member_id: ext.member_id,
+          targets: [],
+          linked_note_id: null,
+          created_at: "",
+          updated_at: "",
+        }),
+      );
+      setEvents([...res.fridge, ...externalAsEvents]);
       setError(null);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : m.errors_load_events_failed();
@@ -168,74 +232,41 @@ export function CalendarView({ members, cars }: CalendarViewProps) {
     }
   }, [fromIso, toIso]);
 
-  const fetchSync = useCallback(async () => {
-    try {
-      const states = await calendarSyncApi.state();
-      setSyncStates(states);
-    } catch {
-      // sync state is best-effort; don't surface
-    }
-  }, []);
-
   useEffect(() => {
-    // Fetch-on-mount + refetch when the visible week changes. setState happens
-    // inside the awaited callback, not in the effect body — known false
-    // positive of the React 19 `react-hooks/set-state-in-effect` rule.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchEvents();
-    void fetchSync();
-  }, [fetchEvents, fetchSync]);
+  }, [fetchEvents]);
 
   useFamilyEvents(fetchEvents);
 
   const filteredEvents = useMemo(() => {
     if (!events) return [];
     return events.filter((ev) => {
-      if (ev.assignee_member_id) {
-        return filters[ev.assignee_member_id] ?? true;
-      }
-      if (ev.car_ids.length > 0 && !ev.assignee_member_id) {
-        return filters.cars;
-      }
-      return true; // family-wide
+      if (ev.assignee_member_id) return filters[ev.assignee_member_id] ?? true;
+      if (ev.car_ids.length > 0 && !ev.assignee_member_id) return filters.cars;
+      return true;
     });
   }, [events, filters]);
 
-  // Populate week-strip dots
-  const weekWithDots = useMemo(() => {
-    const w = week.map((d) => ({ ...d, dots: [] as MemberColor[] }));
-    filteredEvents.forEach((ev) => {
-      const iso = new Date(ev.start_at).toISOString().slice(0, 10);
-      const day = w.find((d) => d.iso === iso);
-      if (!day) return;
-      const color = railColorForEvent(ev, members);
-      if (color === "family") day.dots.push("stone");
-      else day.dots.push(color);
-    });
-    return w;
-  }, [week, filteredEvents, members]);
-
-  // Group events by day
-  const grouped = useMemo(() => {
+  const eventsByIso = useMemo(() => {
     const map = new Map<string, EventResponse[]>();
-    filteredEvents
-      .slice()
-      .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime())
-      .forEach((ev) => {
-        const iso = new Date(ev.start_at).toISOString().slice(0, 10);
-        if (!map.has(iso)) map.set(iso, []);
-        map.get(iso)!.push(ev);
-      });
+    filteredEvents.forEach((ev) => {
+      const iso = localDateKey(new Date(ev.start_at));
+      if (!map.has(iso)) map.set(iso, []);
+      map.get(iso)!.push(ev);
+    });
     return map;
   }, [filteredEvents]);
 
-  const openEditorForNew = () => {
+  const openEditorForNew = (start?: Date) => {
     setEditingEvent(null);
+    setEditorDefaultStart(start ?? null);
     setEditorOpen(true);
   };
   const openEditorForExisting = (ev: EventResponse) => {
-    if (ev.source === "external") return; // read-only
+    if (ev.source === "external") return;
     setEditingEvent(ev);
+    setEditorDefaultStart(null);
     setEditorOpen(true);
   };
 
@@ -243,18 +274,35 @@ export function CalendarView({ members, cars }: CalendarViewProps) {
     void fetchEvents();
   };
 
-  const handlePullMember = async (memberId: string) => {
-    try {
-      await calendarSyncApi.pullMember(memberId);
-      void fetchSync();
-      void fetchEvents();
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : m.errors_sync_failed();
-      toast.error(msg);
+  // Auto-scroll to ~7am on mount and when span changes.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = DEFAULT_SCROLL_HOUR * HOUR_HEIGHT;
+  }, [span]);
+
+  // Live "now" indicator — re-render every minute so the red line tracks.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const headerLabel = useMemo(() => {
+    if (span === 1) {
+      return formatDateTime(days[0].date, { weekday: "long", month: "short", day: "numeric" });
     }
+    return `${formatDateTime(days[0].date, { month: "short", day: "numeric" })}–${formatDateTime(days[days.length - 1].date, { month: "short", day: "numeric" })}`;
+  }, [days, span]);
+
+  const stepDays = (delta: number) => {
+    const d = new Date(anchor);
+    d.setDate(d.getDate() + delta * span);
+    setAnchor(d);
   };
 
-  const weekLabel = `${formatDateTime(week[0].date, { month: "short", day: "numeric" })}–${formatDateTime(week[6].date, { month: "short", day: "numeric" })}`;
+  const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
   return (
     <section
@@ -264,10 +312,23 @@ export function CalendarView({ members, cars }: CalendarViewProps) {
       aria-labelledby="tab-calendar"
     >
       <TabHeader
-        eyebrow={m.calendar_eyebrow_this_week({ range: weekLabel })}
+        eyebrow={m.calendar_eyebrow_this_week({ range: headerLabel })}
         title={m.calendar_title()}
         right={
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div className={styles.spanSwitch} role="group" aria-label={m.calendar_span_switch_aria()}>
+              {([1, 3, 7] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={`${styles.spanOption} ${span === s ? styles.spanOptionActive : ""}`}
+                  onClick={() => setSpan(s)}
+                  aria-pressed={span === s}
+                >
+                  {s === 1 ? m.calendar_days_one() : s === 3 ? m.calendar_days_three() : m.calendar_days_seven()}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               className={`${styles.btn} ${styles.btnGhost} ${styles.btnSmall}`}
@@ -279,11 +340,7 @@ export function CalendarView({ members, cars }: CalendarViewProps) {
               type="button"
               aria-label={m.calendar_prev_week_aria()}
               className={`${styles.btn} ${styles.btnGhost} ${styles.btnSmall}`}
-              onClick={() => {
-                const d = new Date(anchor);
-                d.setDate(d.getDate() - 7);
-                setAnchor(d);
-              }}
+              onClick={() => stepDays(-1)}
             >
               <ChevronLeft size={18} strokeWidth={2.4} />
             </button>
@@ -291,18 +348,34 @@ export function CalendarView({ members, cars }: CalendarViewProps) {
               type="button"
               aria-label={m.calendar_next_week_aria()}
               className={`${styles.btn} ${styles.btnGhost} ${styles.btnSmall}`}
-              onClick={() => {
-                const d = new Date(anchor);
-                d.setDate(d.getDate() + 7);
-                setAnchor(d);
-              }}
+              onClick={() => stepDays(1)}
             >
               <ChevronRight size={18} strokeWidth={2.4} />
             </button>
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                aria-label={m.calendar_filter_button_aria()}
+                aria-expanded={filterOpen}
+                className={`${styles.btn} ${styles.btnGhost} ${styles.btnSmall}`}
+                onClick={() => setFilterOpen((v) => !v)}
+              >
+                <Filter size={18} strokeWidth={2.4} />
+              </button>
+              {filterOpen ? (
+                <FilterPopover
+                  members={members}
+                  cars={cars}
+                  filters={filters}
+                  setFilters={setFilters}
+                  onClose={() => setFilterOpen(false)}
+                />
+              ) : null}
+            </div>
             <button
               type="button"
               className={`${styles.btn} ${styles.btnPrimaryCompact}`}
-              onClick={openEditorForNew}
+              onClick={() => openEditorForNew()}
             >
               <Plus size={18} strokeWidth={2.4} />
               {m.calendar_new_event_button()}
@@ -311,171 +384,61 @@ export function CalendarView({ members, cars }: CalendarViewProps) {
         }
       />
 
-      <div className={styles.viewScroll}>
+      <div className={styles.calGridWrap}>
         {error ? <ErrorBanner message={error} onRetry={() => void fetchEvents()} /> : null}
-        <div className={styles.calLayout}>
-          <div className={styles.calMain}>
-            <div className={styles.calWeekstrip}>
-              {weekWithDots.map((d) => (
-                <button
-                  key={d.iso}
-                  type="button"
-                  className={`${styles.dayPill} ${d.isToday ? styles.today : ""}`}
-                  aria-label={`${d.dow} ${d.dom}`}
-                  aria-current={d.isToday ? "date" : undefined}
-                  onClick={() => setAnchor(d.date)}
-                >
-                  <div className={styles.dow}>{d.dow}</div>
-                  <div className={styles.dom}>{d.dom}</div>
-                  <div className={styles.dotrow}>
-                    {d.dots.slice(0, 3).map((c, i) => (
-                      <span
-                        key={i}
-                        className={styles.tinydot}
-                        style={{ background: d.isToday ? "#fff" : `var(--member-${c})` }}
-                      />
-                    ))}
-                  </div>
-                </button>
+
+        <div
+          className={styles.calDayHeaderRow}
+          style={{ gridTemplateColumns: `64px repeat(${days.length}, 1fr)` }}
+        >
+          <div className={styles.calGutterHeader} aria-hidden="true" />
+          {days.map((d) => (
+            <button
+              key={d.iso}
+              type="button"
+              className={`${styles.calDayHeader} ${d.isToday ? styles.today : ""}`}
+              aria-label={`${d.dow} ${d.dom}`}
+              aria-current={d.isToday ? "date" : undefined}
+              onClick={() => {
+                setAnchor(d.date);
+                if (span !== 1) setSpan(1);
+              }}
+            >
+              <div className={styles.dow}>{d.dow}</div>
+              <div className={styles.dom}>{d.dom}</div>
+            </button>
+          ))}
+        </div>
+
+        <div className={styles.calScroll} ref={scrollRef} aria-label={m.calendar_grid_aria()}>
+          <div
+            className={styles.calGrid}
+            style={{
+              gridTemplateColumns: `64px repeat(${days.length}, 1fr)`,
+              height: HOUR_HEIGHT * 24,
+            }}
+          >
+            <div className={styles.calGutter}>
+              {HOURS.map((h) => (
+                <div key={h} className={styles.calHourLabel} style={{ height: HOUR_HEIGHT }}>
+                  {h === 0 ? "" : formatHour(h)}
+                </div>
               ))}
             </div>
 
-            <div className={styles.agenda}>
-              {events === null ? (
-                <div style={{ padding: 24, color: "var(--muted-fg)" }}>{m.calendar_loading_events()}</div>
-              ) : grouped.size === 0 ? (
-                <div
-                  style={{
-                    padding: 32,
-                    textAlign: "center",
-                    color: "var(--muted-fg)",
-                    border: "2px dashed var(--border-color)",
-                    borderRadius: "var(--radius-card)",
-                  }}
-                >
-                  {m.calendar_empty_week()}
-                </div>
-              ) : (
-                Array.from(grouped.entries()).map(([iso, items]) => {
-                  const first = new Date(items[0].start_at);
-                  const isToday = first.toDateString() === new Date().toDateString();
-                  const dow = formatDateTime(first, { weekday: "short" }).toUpperCase();
-                  const dom = first.getDate();
-                  return (
-                    <div key={iso} className={styles.agendaDay}>
-                      <div className={`${styles.dayGutter} ${isToday ? styles.today : ""}`}>
-                        <div className={styles.dow}>{dow}</div>
-                        <div className={styles.dom}>{dom}</div>
-                        {isToday ? <div className={styles.todayPill}>{m.calendar_today_pill()}</div> : null}
-                      </div>
-                      <div className={styles.agendaEvents}>
-                        {items.map((ev) => (
-                          <EventCard
-                            key={ev.id}
-                            event={ev}
-                            members={members}
-                            cars={cars}
-                            onClick={() => openEditorForExisting(ev)}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+            {days.map((day) => (
+              <DayColumn
+                key={day.iso}
+                day={day}
+                events={eventsByIso.get(day.iso) ?? []}
+                members={members}
+                cars={cars}
+                now={now}
+                onSlotClick={(slotStart) => openEditorForNew(slotStart)}
+                onEventClick={openEditorForExisting}
+              />
+            ))}
           </div>
-
-          <aside className={styles.calSide} aria-label="Calendar side panel">
-            <div>
-              <div className={styles.sideTitle}>Synced calendars</div>
-              <div className={styles.sideSub}>Pulled per family settings.</div>
-              <div className={styles.syncList}>
-                {members
-                  .filter((m) => m.status === "active")
-                  .map((m) => {
-                    const state = syncStates.find((s) => s.member_id === m.id);
-                    const status = m.google.status;
-                    const label =
-                      status === "connected"
-                        ? state?.last_pull_at
-                          ? `${formatRelative(state.last_pull_at)} ago`
-                          : "Syncing…"
-                        : status === "not_connected"
-                        ? "Not connected"
-                        : status === "reconnect_needed"
-                        ? "Reconnect"
-                        : "Revoked";
-                    const dotClass =
-                      status === "connected"
-                        ? styles.syncOk
-                        : status === "reconnect_needed"
-                        ? `${styles.syncOk} ${styles.syncWarn}`
-                        : status === "not_connected"
-                        ? `${styles.syncOk} ${styles.syncWarn}`
-                        : `${styles.syncOk} ${styles.syncErr}`;
-                    return (
-                      <div key={m.id} className={styles.syncRow}>
-                        <MemberAvatar
-                          initials={initialsFromName(m.name)}
-                          color={m.color}
-                          size="md"
-                        />
-                        <div className={styles.name}>{m.name}</div>
-                        <div className={styles.last}>{label}</div>
-                        <button
-                          type="button"
-                          aria-label={`Sync ${m.name} now`}
-                          onClick={() => void handlePullMember(m.id)}
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            cursor: "pointer",
-                            padding: 0,
-                          }}
-                          disabled={status !== "connected"}
-                        >
-                          <span className={dotClass} title={`Sync status: ${status}`} />
-                        </button>
-                      </div>
-                    );
-                  })}
-              </div>
-            </div>
-
-            <div>
-              <div className={styles.sideTitle}>Show on board</div>
-              <div className={styles.sideSub}>Toggle to filter the agenda.</div>
-              <div className={styles.filterRow}>
-                {members
-                  .filter((m) => m.status === "active")
-                  .map((m) => (
-                    <label key={m.id} className={styles.filterChip}>
-                      <MemberAvatar initials={initialsFromName(m.name)} color={m.color} />
-                      <span className={styles.name}>{m.name}</span>
-                      <input
-                        type="checkbox"
-                        checked={filters[m.id] ?? true}
-                        onChange={(e) =>
-                          setFilters((f) => ({ ...f, [m.id]: e.target.checked }))
-                        }
-                      />
-                    </label>
-                  ))}
-                <label className={styles.filterChip}>
-                  <CarAvatar color="stone" />
-                  <span className={styles.name}>
-                    Cars ({cars.filter((c) => c.status === "active").length})
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={filters.cars}
-                    onChange={(e) => setFilters((f) => ({ ...f, cars: e.target.checked }))}
-                  />
-                </label>
-              </div>
-            </div>
-          </aside>
         </div>
       </div>
 
@@ -484,6 +447,7 @@ export function CalendarView({ members, cars }: CalendarViewProps) {
         event={editingEvent}
         members={members}
         cars={cars}
+        defaultStart={editorDefaultStart}
         onClose={() => setEditorOpen(false)}
         onSaved={handleSaved}
       />
@@ -491,118 +455,189 @@ export function CalendarView({ members, cars }: CalendarViewProps) {
   );
 }
 
-function formatRelative(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const min = Math.round(ms / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h`;
-  const d = Math.round(hr / 24);
-  return `${d}d`;
+interface DayColumnProps {
+  day: DayInfo;
+  events: EventResponse[];
+  members: MemberResponse[];
+  cars: CarResponse[];
+  now: Date;
+  onSlotClick: (start: Date) => void;
+  onEventClick: (ev: EventResponse) => void;
 }
 
-interface EventCardProps {
+function DayColumn({ day, events, members, cars, now, onSlotClick, onEventClick }: DayColumnProps) {
+  const slots = Array.from({ length: (24 * 60) / SLOT_MINUTES }, (_, i) => i);
+  const isNowInThisDay = day.date.toDateString() === now.toDateString();
+  const nowTop = (minutesFromMidnight(now) / 60) * HOUR_HEIGHT;
+
+  return (
+    <div className={`${styles.calCol} ${day.isToday ? styles.calColToday : ""}`}>
+      {slots.map((slot) => {
+        const minutes = slot * SLOT_MINUTES;
+        const top = (minutes / 60) * HOUR_HEIGHT;
+        const slotStart = new Date(day.date);
+        slotStart.setHours(0, minutes, 0, 0);
+        const isHourBoundary = minutes % 60 === 0;
+        return (
+          <button
+            key={slot}
+            type="button"
+            className={`${styles.calSlot} ${isHourBoundary ? styles.calSlotHour : ""}`}
+            style={{ top, height: (SLOT_MINUTES / 60) * HOUR_HEIGHT }}
+            aria-label={m.calendar_grid_new_event_aria({ day: day.dow, time: formatTimeShort(slotStart) })}
+            onClick={() => onSlotClick(slotStart)}
+          />
+        );
+      })}
+
+      {events.map((ev) => (
+        <EventBlock
+          key={ev.id}
+          event={ev}
+          members={members}
+          cars={cars}
+          dayStart={day.date}
+          onClick={() => onEventClick(ev)}
+        />
+      ))}
+
+      {isNowInThisDay ? (
+        <div className={styles.calNowLine} style={{ top: nowTop }} aria-hidden="true">
+          <span className={styles.calNowDot} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface EventBlockProps {
   event: EventResponse;
   members: MemberResponse[];
   cars: CarResponse[];
+  dayStart: Date;
   onClick: () => void;
 }
 
-function EventCard({ event, members, cars, onClick }: EventCardProps) {
+function EventBlock({ event, members, cars, dayStart, onClick }: EventBlockProps) {
   const start = new Date(event.start_at);
   const end = new Date(event.end_at);
-  const { time, meridiem } = formatTime(start);
-  const dur = durationLabel(start, end);
+
+  const dayMidnight = startOfDay(dayStart).getTime();
+  const startMin = clampPositive((start.getTime() - dayMidnight) / 60_000);
+  const rawEndMin = (end.getTime() - dayMidnight) / 60_000;
+  const endMin = Math.min(rawEndMin, 24 * 60);
+  const durMin = Math.max(20, endMin - startMin);
+
+  const top = (startMin / 60) * HOUR_HEIGHT;
+  const height = (durMin / 60) * HOUR_HEIGHT;
+
   const color = railColorForEvent(event, members);
   const cls = railClass(color);
-
-  const fanout = event.assignee_member_id == null && event.car_ids.length === 0 && event.targets.length > 0;
+  const isExternal = event.source === "external";
+  const assignee = event.assignee_member_id
+    ? members.find((mm) => mm.id === event.assignee_member_id)
+    : null;
 
   return (
     <article
-      className={`${styles.eventCard} ${cls}`}
-      onClick={onClick}
-      role="button"
-      tabIndex={0}
+      className={`${styles.calEvent} ${cls} ${isExternal ? styles.calEventExternal : ""}`}
+      style={{ top, height }}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!isExternal) onClick();
+      }}
+      role={isExternal ? "article" : "button"}
+      tabIndex={isExternal ? -1 : 0}
       onKeyDown={(e) => {
+        if (isExternal) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onClick();
         }
       }}
+      aria-label={`${event.title} — ${formatTimeShort(start)}`}
     >
-      <div className={styles.eventTime}>
-        <div className={styles.t}>{time}</div>
-        <div className={styles.meridiem}>
-          {meridiem} · {dur}
+      <div className={styles.calEventHeader}>
+        <div className={styles.calEventTitle}>{event.title}</div>
+        <div className={styles.calEventAvatars}>
+          {assignee ? (
+            <MemberAvatar
+              initials={initialsFromName(assignee.name)}
+              color={assignee.color}
+              size="sm"
+              title={assignee.name}
+            />
+          ) : null}
+          {event.car_ids.map((cid) => {
+            const c = cars.find((x) => x.id === cid);
+            if (!c) return null;
+            return <CarAvatar key={cid} color={c.color} size="sm" title={c.name} />;
+          })}
         </div>
       </div>
-      <div className={styles.eventBody}>
-        <div className={styles.eventTitle}>{event.title}</div>
-        <div className={styles.eventMeta}>
-          {event.location ? (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <MapPin size={12} strokeWidth={2} />
-              {event.location}
-            </span>
-          ) : null}
-          {event.rrule ? (
-            <>
-              {event.location ? <span className={styles.dividerDot} /> : null}
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                <Repeat size={12} strokeWidth={2} />
-                Recurring
-              </span>
-            </>
-          ) : null}
-          {event.linked_note_id ? (
-            <>
-              <span className={styles.dividerDot} />
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                <Link2 size={12} strokeWidth={2} />
-                Linked to fridge note
-              </span>
-            </>
-          ) : null}
-          {fanout ? (
-            <>
-              <span className={styles.dividerDot} />
-              <span style={{ color: "var(--accent)", fontWeight: 700 }}>
-                Synced to {event.targets.filter((t) => t.sync_status === "synced").length}{" "}
-                calendars
-              </span>
-            </>
-          ) : null}
-          {event.source === "external" ? (
-            <>
-              <span className={styles.dividerDot} />
-              <span style={{ color: "var(--muted-fg)" }}>External</span>
-            </>
-          ) : null}
-        </div>
-      </div>
-      <div className={styles.eventAssignees}>
-        {event.assignee_member_id
-          ? (() => {
-              const m = members.find((x) => x.id === event.assignee_member_id);
-              if (!m) return null;
-              return (
-                <MemberAvatar
-                  initials={initialsFromName(m.name)}
-                  color={m.color}
-                  size="md"
-                  title={m.name}
-                />
-              );
-            })()
-          : null}
-        {event.car_ids.map((cid) => {
-          const c = cars.find((x) => x.id === cid);
-          if (!c) return null;
-          return <CarAvatar key={cid} color={c.color} size="md" title={c.name} />;
-        })}
+      <div className={styles.calEventMeta}>
+        <span>{formatTimeShort(start)}</span>
+        {event.location ? <span>· {event.location}</span> : null}
       </div>
     </article>
+  );
+}
+
+interface FilterPopoverProps {
+  members: MemberResponse[];
+  cars: CarResponse[];
+  filters: Record<string, boolean>;
+  setFilters: (updater: (prev: Record<string, boolean>) => Record<string, boolean>) => void;
+  onClose: () => void;
+}
+
+function FilterPopover({ members, cars, filters, setFilters, onClose }: FilterPopoverProps) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div ref={ref} className={styles.filterPopover} role="dialog" aria-label={m.calendar_filter_popover_title()}>
+      <div className={styles.sideTitle}>{m.calendar_filter_popover_title()}</div>
+      <div className={styles.filterRow}>
+        {members
+          .filter((mem) => mem.status === "active")
+          .map((mem) => (
+            <label key={mem.id} className={styles.filterChip}>
+              <MemberAvatar initials={initialsFromName(mem.name)} color={mem.color} />
+              <span className={styles.name}>{mem.name}</span>
+              <input
+                type="checkbox"
+                checked={filters[mem.id] ?? true}
+                onChange={(e) => setFilters((f) => ({ ...f, [mem.id]: e.target.checked }))}
+              />
+            </label>
+          ))}
+        <label className={styles.filterChip}>
+          <CarAvatar color="stone" />
+          <span className={styles.name}>
+            {m.calendar_filter_cars_label({ count: cars.filter((c) => c.status === "active").length })}
+          </span>
+          <input
+            type="checkbox"
+            checked={filters.cars ?? true}
+            onChange={(e) => setFilters((f) => ({ ...f, cars: e.target.checked }))}
+          />
+        </label>
+      </div>
+    </div>
   );
 }

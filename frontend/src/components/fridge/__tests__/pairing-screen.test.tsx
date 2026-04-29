@@ -107,9 +107,4 @@ describe("[integration] PairingScreen", () => {
     expect(calls).toBe(2);
   });
 
-  test("legacy escape hatch: renders a link back to /login", () => {
-    render(<PairingScreen />);
-    const link = screen.getByRole("link", { name: /legacy login/i });
-    expect(link).toHaveAttribute("href", "/login");
-  });
 });

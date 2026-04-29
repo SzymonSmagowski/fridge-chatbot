@@ -1,5 +1,5 @@
 "use client";
-import { Check, Clock, LogIn, MoreHorizontal, Pencil, Plus } from "lucide-react";
+import { Check, Clock, LogIn, MoreHorizontal, Pencil, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import styles from "./fridge.module.css";
@@ -7,6 +7,7 @@ import { AddCarSheet } from "./add-car-sheet";
 import { AddMemberSheet } from "./add-member-sheet";
 import { CarAvatar } from "./car-avatar";
 import { ConfirmDialog } from "./confirm-dialog";
+import { ConnectGoogleModal } from "./connect-google-modal";
 import { ErrorBanner } from "./error-banner";
 import { LanguageSwitcher } from "./language-switcher";
 import { MemberAvatar } from "./member-avatar";
@@ -15,14 +16,15 @@ import { m } from "@/paraglide/messages.js";
 import { initialsFromName } from "./types";
 import {
   ApiError,
+  calendarSyncApi,
   carsApi,
   familyApi,
   membersApi,
-  oauthApi,
   type CarResponse,
   type FamilyPreferencesResponse,
   type FamilyResponse,
   type MemberResponse,
+  type SyncStateResponse,
 } from "@/lib/api";
 
 export interface SettingsViewProps {
@@ -50,6 +52,8 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
   const [prefs, setPrefs] = useState<FamilyPreferencesResponse | null>(null);
   const [prefsError, setPrefsError] = useState<string | null>(null);
 
+  const [syncStates, setSyncStates] = useState<SyncStateResponse[]>([]);
+
   const [memberSheet, setMemberSheet] = useState<
     { mode: "create" } | { mode: "edit"; member: MemberResponse } | null
   >(null);
@@ -65,6 +69,11 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
     onConfirm: () => void;
   }>(null);
 
+  const [connectTarget, setConnectTarget] = useState<{
+    memberId: string;
+    memberName: string;
+  } | null>(null);
+
   const fetchPrefs = useCallback(async () => {
     try {
       const p = await familyApi.getPreferences();
@@ -76,12 +85,32 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
     }
   }, []);
 
+  const fetchSync = useCallback(async () => {
+    try {
+      const states = await calendarSyncApi.state();
+      setSyncStates(states);
+    } catch {
+      // best-effort — don't surface
+    }
+  }, []);
+
+  const handlePullMember = useCallback(async (memberId: string) => {
+    try {
+      await calendarSyncApi.pullMember(memberId);
+      void fetchSync();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : m.errors_sync_failed();
+      toast.error(msg);
+    }
+  }, [fetchSync]);
+
   useEffect(() => {
     // setState happens inside the awaited callback, not in the effect body —
     // known false positive of the React 19 `react-hooks/set-state-in-effect` rule.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchPrefs();
-  }, [fetchPrefs]);
+    void fetchSync();
+  }, [fetchPrefs, fetchSync]);
 
   const refetchMembers = useCallback(async () => {
     try {
@@ -180,15 +209,14 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
     }
   };
 
-  const connectGoogle = async (memberId: string) => {
-    try {
-      const res = await oauthApi.authorize(memberId);
-      window.location.assign(res.authorize_url);
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Could not start Google flow";
-      toast.error(msg);
-    }
-  };
+  const connectGoogle = useCallback((member: MemberResponse) => {
+    setConnectTarget({ memberId: member.id, memberName: member.name });
+  }, []);
+
+  const onConnectComplete = useCallback(() => {
+    setConnectTarget(null);
+    void refetchMembers();
+  }, [refetchMembers]);
 
   const familyName = family?.name ?? "Your Family";
   const familyInitial = familyName.charAt(0);
@@ -261,7 +289,7 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
                   member={m}
                   onEdit={() => setMemberSheet({ mode: "edit", member: m })}
                   onSetInactive={() => setMemberInactive(m)}
-                  onConnectGoogle={() => void connectGoogle(m.id)}
+                  onConnectGoogle={() => connectGoogle(m)}
                 />
               ))}
             </div>
@@ -275,6 +303,12 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
               Add a family member
             </button>
           </div>
+
+          <SyncedCalendarsCard
+            members={activeMembers}
+            syncStates={syncStates}
+            onPull={handlePullMember}
+          />
 
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <div className={styles.settingsCard}>
@@ -362,6 +396,13 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
         destructive={confirm?.destructive}
         onConfirm={() => confirm?.onConfirm()}
         onCancel={() => setConfirm(null)}
+      />
+
+      <ConnectGoogleModal
+        open={connectTarget !== null}
+        memberId={connectTarget?.memberId ?? null}
+        memberName={connectTarget?.memberName ?? null}
+        onClose={onConnectComplete}
       />
     </section>
   );
@@ -607,6 +648,80 @@ function PreferencesPanel({
       />
     </div>
   );
+}
+
+function SyncedCalendarsCard({
+  members,
+  syncStates,
+  onPull,
+}: {
+  members: MemberResponse[];
+  syncStates: SyncStateResponse[];
+  onPull: (memberId: string) => void;
+}) {
+  return (
+    <div className={styles.settingsCard}>
+      <h3>{m.settings_synced_calendars_title()}</h3>
+      <div className={styles.sub}>{m.settings_synced_calendars_subtitle()}</div>
+      <div className={styles.syncList}>
+        {members.map((mem) => {
+          const state = syncStates.find((s) => s.member_id === mem.id);
+          const status = mem.google.status;
+          const label =
+            status === "connected"
+              ? state?.last_pull_at
+                ? m.calendar_sync_label_relative({ value: formatRelative(state.last_pull_at) })
+                : m.calendar_sync_label_syncing()
+              : status === "not_connected"
+              ? m.calendar_sync_label_not_connected()
+              : status === "reconnect_needed"
+              ? m.calendar_sync_label_reconnect()
+              : m.calendar_sync_label_revoked();
+          const dotClass =
+            status === "connected"
+              ? styles.syncOk
+              : status === "reconnect_needed"
+              ? `${styles.syncOk} ${styles.syncWarn}`
+              : status === "not_connected"
+              ? `${styles.syncOk} ${styles.syncWarn}`
+              : `${styles.syncOk} ${styles.syncErr}`;
+          return (
+            <div key={mem.id} className={styles.syncRow}>
+              <MemberAvatar
+                initials={initialsFromName(mem.name)}
+                color={mem.color}
+                size="md"
+              />
+              <div className={styles.name}>{mem.name}</div>
+              <div className={styles.last}>{label}</div>
+              <button
+                type="button"
+                aria-label={m.calendar_sync_now_aria({ name: mem.name })}
+                onClick={() => onPull(mem.id)}
+                disabled={status !== "connected"}
+                className={styles.iconBtn}
+                style={{ width: 32, height: 32, opacity: status === "connected" ? 1 : 0.5 }}
+              >
+                <RefreshCw size={14} strokeWidth={2.2} />
+              </button>
+              <span className={dotClass} title={m.calendar_sync_status_title({ status })} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function formatRelative(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const min = Math.round(ms / 60_000);
+  if (min < 1) return m.relative_just_now();
+  if (min < 60) return m.relative_minutes({ count: min });
+  const hr = Math.round(min / 60);
+  if (hr < 24) return m.relative_hours({ count: hr });
+  const d = Math.round(hr / 24);
+  return m.relative_days({ count: d });
 }
 
 function PrefToggleRow({

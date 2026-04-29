@@ -1,6 +1,6 @@
 /**
- * Integration tests for CalendarView — week strip nav, agenda render, event
- * editor open/save, "no Google" hint, fan-out copy on family events.
+ * Integration tests for CalendarView — time-grid render, day-header nav,
+ * event block, "no Google" hint when picking an unconnected assignee.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -28,27 +28,21 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+function dayHeaderButtons() {
+  return screen
+    .getAllByRole("button")
+    .filter((b) => /^[\p{L}.]+ \d{1,2}$/u.test(b.getAttribute("aria-label") ?? ""));
+}
+
 describe("[integration] CalendarView", () => {
-  test("renders the week strip with 7 day pills", async () => {
+  test("renders the time grid with day headers", async () => {
     server.use(...successHandlers({ events: [] }));
     render(<CalendarView members={FIXTURE_MEMBERS} cars={FIXTURE_CARS} />);
-    await waitFor(() => screen.getByText(/no events this week/i));
-    // 7 day-pill buttons should be present (`aria-label="Mon 22"` etc).
-    const dayButtons = screen.getAllByRole("button").filter((b) => /^[A-Z][a-z]{2} \d{1,2}$/.test(b.getAttribute("aria-label") ?? ""));
-    expect(dayButtons.length).toBe(7);
+    await screen.findByLabelText(/time grid/i);
+    expect(dayHeaderButtons().length).toBeGreaterThanOrEqual(1);
   });
 
-  test("empty: shows 'No events this week' CTA", async () => {
-    server.use(...successHandlers({ events: [] }));
-    render(<CalendarView members={FIXTURE_MEMBERS} cars={FIXTURE_CARS} />);
-    await waitFor(() => {
-      expect(screen.getByText(/no events this week/i)).toBeInTheDocument();
-    });
-  });
-
-  test("populated: renders event cards with title, time, location", async () => {
-    // Fixture has Soccer practice for Ola — adjust start_at to "today" so the
-    // week-range query returns it regardless of when tests run.
+  test("populated: renders an event block with title", async () => {
     const today = new Date();
     today.setHours(16, 0, 0, 0);
     const end = new Date(today.getTime() + 90 * 60 * 1000);
@@ -60,7 +54,6 @@ describe("[integration] CalendarView", () => {
     render(<CalendarView members={FIXTURE_MEMBERS} cars={FIXTURE_CARS} />);
     await waitFor(() => {
       expect(screen.getByText("Soccer practice")).toBeInTheDocument();
-      expect(screen.getByText(/riverside park/i)).toBeInTheDocument();
     });
   });
 
@@ -110,7 +103,7 @@ describe("[integration] CalendarView", () => {
 
     const user = userEvent.setup();
     render(<CalendarView members={FIXTURE_MEMBERS} cars={FIXTURE_CARS} />);
-    await waitFor(() => screen.getByText(/no events this week/i));
+    await screen.findByLabelText(/time grid/i);
 
     await user.click(screen.getByRole("button", { name: /new event/i }));
     const sheet = await screen.findByRole("dialog", { name: /new event/i });
@@ -129,7 +122,7 @@ describe("[integration] CalendarView", () => {
     server.use(...successHandlers({ events: [] }));
     const user = userEvent.setup();
     render(<CalendarView members={FIXTURE_MEMBERS} cars={FIXTURE_CARS} />);
-    await waitFor(() => screen.getByText(/no events this week/i));
+    await screen.findByLabelText(/time grid/i);
 
     await user.click(screen.getByRole("button", { name: /new event/i }));
     const sheet = await screen.findByRole("dialog", { name: /new event/i });

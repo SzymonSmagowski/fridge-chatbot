@@ -29,10 +29,15 @@ class _StubOAuthService:
     def __init__(self, *, refresh_token: str = "rt-123") -> None:
         self.refresh_token = refresh_token
 
-    def build_authorize_url(self, state: str) -> str:
-        return f"https://accounts.google.com/o/oauth2/v2/auth?state={state}"
+    def build_authorize_url(self, state: str) -> tuple[str, str]:
+        return (
+            f"https://accounts.google.com/o/oauth2/v2/auth?state={state}",
+            "stub-code-verifier",
+        )
 
-    def exchange_code(self, code: str) -> dict[str, Any]:
+    def exchange_code(
+        self, code: str, code_verifier: str | None = None
+    ) -> dict[str, Any]:
         return {
             "access_token": "at-xyz",
             "refresh_token": self.refresh_token,
@@ -91,10 +96,10 @@ def test_pair_callback_creates_family_device_member_and_sets_token(
         follow_redirects=False,
     )
     assert resp.status_code == 302
-    # A1: callback now redirects to /pair/complete?token=<jwt> (architecture §5.1).
-    # The cookie path was removed — the SPA grabs the token from the query string
-    # and persists it to localStorage itself.
-    assert resp.headers["location"].startswith("/pair/complete?token=")
+    # A1: callback now redirects to <FRONTEND_BASE_URL>/pair/complete?token=<jwt>
+    # (architecture §5.1). The cookie path was removed — the SPA grabs the token
+    # from the query string and persists it to localStorage itself.
+    assert "/pair/complete?token=" in resp.headers["location"]
     assert "fridge_device_token" not in resp.cookies
 
     family = db.query(Family).first()
@@ -156,8 +161,8 @@ def test_pair_callback_without_refresh_token_returns_400(
     """Per §4.1 D9: Google MUST return a refresh_token; otherwise 400."""
 
     class _NoRefreshStub(_StubOAuthService):
-        def exchange_code(self, code):
-            data = super().exchange_code(code)
+        def exchange_code(self, code, code_verifier=None):
+            data = super().exchange_code(code, code_verifier=code_verifier)
             data["refresh_token"] = None
             return data
 
@@ -199,6 +204,49 @@ def test_oauth_authorize_for_member_returns_authorize_url(
     assert "state=connect:" in resp.json()["authorize_url"]
 
 
+@pytest.mark.asyncio
+async def test_connect_callback_redirects_to_connected_page_and_publishes_event(
+    client: TestClient, auth_headers, db, family, oauth_stub, family_event_collector
+) -> None:
+    """Connect-flow callback: phone-side redirects to /connected and the kiosk
+    learns of the new connection via the family-events bus (powers the QR
+    modal's auto-dismiss + the member-row badge flip)."""
+    family_id, _, _ = family
+    member = Member(family_id=family_id, name="Mom", color="rose")
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+
+    # Authorize step seeds Redis state + verifier; pull the state_id back out
+    # of the URL so we can replay the callback with it.
+    resp = client.get(
+        f"/oauth/google/authorize?member_id={member.id}", headers=auth_headers
+    )
+    state = resp.json()["authorize_url"].split("state=")[1].split("&")[0]
+    assert state.startswith("connect:")
+    state_id = state.split(":", 1)[1]
+
+    async with family_event_collector(family_id) as collector:
+        cb = client.get(
+            "/oauth/google/callback",
+            params={"code": "fake-code", "state": f"connect:{state_id}"},
+            follow_redirects=False,
+        )
+        frames = await collector.wait_for(1)
+
+    assert cb.status_code == 302
+    location = cb.headers["location"]
+    assert "/connected?" in location
+    assert f"member={member.name.replace(' ', '%20')}" in location
+
+    assert any(
+        f.get("type") == "member.google_connected"
+        and f.get("entity") == "members"
+        and f.get("id") == str(member.id)
+        for f in frames
+    ), f"expected member.google_connected event, got {frames!r}"
+
+
 # ---------------------------------------------------------------------------
 # A1 — contract: pair callback redirects to /pair/complete?token=<jwt>, NOT
 # the legacy /settings?paired=1&token= target. The frontend Pairing page reads
@@ -225,7 +273,7 @@ def test_pair_callback_redirect_location_targets_pair_complete_with_token(
     )
     assert resp.status_code == 302
     location = resp.headers["location"]
-    assert location.startswith("/pair/complete?token=")
+    assert "/pair/complete?token=" in location
     # The token must be present and decode against our JWT secret with typ=device.
     token = location.split("token=", 1)[1]
     assert token, "Location header had no JWT after token="

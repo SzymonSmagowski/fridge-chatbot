@@ -15,9 +15,6 @@ import { m } from "@/paraglide/messages.js";
  *
  * The OAuth callback now redirects directly to `/pair/complete?token=<jwt>`,
  * which is the sole token-handling surface — no token-catching shim lives here.
- *
- * Legacy `/login` is still available as a developer escape hatch but is no
- * longer the default entry point.
  */
 export default function HomePage() {
   const router = useRouter();
@@ -42,9 +39,18 @@ export default function HomePage() {
 }
 
 function Loading() {
+  // Paraglide reads locale from localStorage, which is unavailable during SSR.
+  // Server renders the base-locale text; client hydrates with the user's locale
+  // → text mismatch. suppressHydrationWarning is the documented fix for the
+  // narrow case of a single SSR-only-then-replaced string.
   return (
     <main className="flex flex-1 items-center justify-center">
-      <p className="text-sm text-muted-foreground">{m.common_loading()}</p>
+      <p
+        className="text-sm text-muted-foreground"
+        suppressHydrationWarning
+      >
+        {m.common_loading()}
+      </p>
     </main>
   );
 }

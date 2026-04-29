@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # LLM
     OPENAI_API_KEY: str | None = None
-    DEFAULT_MODEL: str = "gpt-4o-mini"
+    DEFAULT_MODEL: str = "gpt-5.4-nano"
     DEFAULT_TEMPERATURE: float = 0.7
     DEFAULT_MAX_TOKENS: int = 1000
 
@@ -46,6 +46,17 @@ class Settings(BaseSettings):
     GOOGLE_OAUTH_SCOPES: str = (
         "openid email profile https://www.googleapis.com/auth/calendar"
     )
+
+    # Frontend base URL — used for OAuth callback redirects. Backend and
+    # frontend run on different origins, so the redirect target must be
+    # absolute or the browser stays on the backend origin and 404s.
+    FRONTEND_BASE_URL: str = "http://localhost:3000"
+
+    # Resource monitor — when true, a background task logs the uvicorn
+    # process's CPU% / RSS / threads / fd count every few seconds. Useful for
+    # local diagnosis of perf regressions; should stay off in production.
+    BACKEND_RESOURCE_MONITOR: bool = False
+    BACKEND_RESOURCE_MONITOR_INTERVAL_SECONDS: float = 5.0
 
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"

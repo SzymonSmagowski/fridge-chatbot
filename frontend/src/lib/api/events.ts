@@ -34,8 +34,27 @@ export interface EventResponse {
   updated_at: string;
 }
 
+/** External (read-only) event from a member's connected Google Calendar.
+ * Backend uses a separate shape because the source row has no targets, no
+ * cars, no linked note — only the basic time + title + member it came from. */
+export interface ExternalEventResponse {
+  id: string;
+  family_id: string;
+  member_id: string;
+  google_event_id: string;
+  title: string | null;
+  description: string | null;
+  start_at: string;
+  end_at: string;
+  location: string | null;
+  is_all_day: boolean;
+  rrule: string | null;
+  source: "external";
+}
+
 export interface EventListResponse {
-  items: EventResponse[];
+  fridge: EventResponse[];
+  external: ExternalEventResponse[];
   total: number;
 }
 

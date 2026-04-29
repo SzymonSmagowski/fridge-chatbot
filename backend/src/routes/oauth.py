@@ -14,16 +14,21 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
+from urllib.parse import quote
+
 from src.core.dependencies import (
     DeviceContext,
     get_auth_service,
+    get_chat_streamer,
     get_crypto_service,
     get_db,
     get_device_context,
     get_google_oauth_service,
     get_redis,
+    get_session_factory_dep,
     get_settings,
 )
+from src.core.family_events import family_event_payload
 from src.core.labels import RESERVED_DISPLAY_NAMES, RESERVED_SLUGS
 from src.core.settings import Settings
 from src.models import (
@@ -38,19 +43,23 @@ from src.models import (
     NoteLabel,
     User,
 )
-from src.routes.pairing import PAIRING_KEY_PREFIX
+from src.routes.pairing import PAIRING_KEY_PREFIX, PAIRING_VERIFIER_KEY_PREFIX
 from src.schemas.oauth import AuthorizeUrlResponse
 from src.services.auth_service import AuthService
 from src.services.crypto_service import CryptoService
+from src.services.chat_streaming import ChatStreamer
+from src.services.google_calendar_service import GoogleCalendarService
 from src.services.google_oauth_service import GoogleOAuthService
 from src.services.google_token_service import GoogleTokenService
 from src.services.logger import get_logger
+from src.workers.calendar_sync_worker import _pull_member
 
 router = APIRouter(prefix="/oauth/google", tags=["oauth"])
 logger = get_logger("oauth")
 
 DEFAULT_COLOR = "sage"
 CONNECT_STATE_KEY = "oauth_connect:"
+CONNECT_VERIFIER_KEY = "oauth_connect:verifier:"
 CONNECT_STATE_TTL = 600
 
 
@@ -72,10 +81,16 @@ async def authorize_for_member(
 
     state_id = secrets.token_urlsafe(24)
     state = f"connect:{state_id}"
+    url, code_verifier = oauth.build_authorize_url(state=state)
     try:
         await redis.set(
             f"{CONNECT_STATE_KEY}{state_id}",
             str(member.id),
+            ex=CONNECT_STATE_TTL,
+        )
+        await redis.set(
+            f"{CONNECT_VERIFIER_KEY}{state_id}",
+            code_verifier,
             ex=CONNECT_STATE_TTL,
         )
     except RedisError as exc:
@@ -83,7 +98,7 @@ async def authorize_for_member(
             status_code=503, detail="OAuth temporarily unavailable"
         ) from exc
 
-    return AuthorizeUrlResponse(authorize_url=oauth.build_authorize_url(state=state))
+    return AuthorizeUrlResponse(authorize_url=url)
 
 
 @router.delete("/{member_id}")
@@ -128,6 +143,8 @@ async def google_callback(
     crypto: CryptoService = Depends(get_crypto_service),
     auth_service: AuthService = Depends(get_auth_service),
     settings: Settings = Depends(get_settings),
+    streamer: ChatStreamer = Depends(get_chat_streamer),
+    session_factory=Depends(get_session_factory_dep),
 ):
     kind, _, ident = state.partition(":")
     if kind == "pair":
@@ -150,6 +167,8 @@ async def google_callback(
             oauth=oauth,
             crypto=crypto,
             settings=settings,
+            streamer=streamer,
+            session_factory=session_factory,
         )
     raise HTTPException(status_code=400, detail="Unknown OAuth state kind")
 
@@ -168,9 +187,11 @@ async def _handle_pair_callback(
     label_value = await redis.get(f"{PAIRING_KEY_PREFIX}{pairing_id}")
     if label_value is None:
         raise HTTPException(status_code=400, detail="Pairing session expired")
+    code_verifier = await redis.get(f"{PAIRING_VERIFIER_KEY_PREFIX}{pairing_id}")
     await redis.delete(f"{PAIRING_KEY_PREFIX}{pairing_id}")
+    await redis.delete(f"{PAIRING_VERIFIER_KEY_PREFIX}{pairing_id}")
 
-    tokens = oauth.exchange_code(code)
+    tokens = oauth.exchange_code(code, code_verifier=code_verifier)
     if not tokens.get("refresh_token"):
         raise HTTPException(
             status_code=400,
@@ -267,7 +288,7 @@ async def _handle_pair_callback(
     # backend session. Acceptable for a one-shot pairing redirect; the cookie
     # path is gone — frontend persists to localStorage + cookie itself.
     return RedirectResponse(
-        url=f"/pair/complete?token={device_token}",
+        url=f"{settings.FRONTEND_BASE_URL}/pair/complete?token={device_token}",
         status_code=status.HTTP_302_FOUND,
     )
 
@@ -281,17 +302,21 @@ async def _handle_connect_callback(
     oauth: GoogleOAuthService,
     crypto: CryptoService,
     settings: Settings,
+    streamer: ChatStreamer,
+    session_factory,
 ) -> RedirectResponse:
     member_id_raw = await redis.get(f"{CONNECT_STATE_KEY}{state_id}")
     if member_id_raw is None:
         raise HTTPException(status_code=400, detail="OAuth state expired")
+    code_verifier = await redis.get(f"{CONNECT_VERIFIER_KEY}{state_id}")
     await redis.delete(f"{CONNECT_STATE_KEY}{state_id}")
+    await redis.delete(f"{CONNECT_VERIFIER_KEY}{state_id}")
 
     member = db.query(Member).filter(Member.id == member_id_raw).first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
-    tokens = oauth.exchange_code(code)
+    tokens = oauth.exchange_code(code, code_verifier=code_verifier)
     if not tokens.get("refresh_token"):
         raise HTTPException(
             status_code=400,
@@ -307,10 +332,39 @@ async def _handle_connect_callback(
         scope=tokens.get("scope") or "",
     )
 
+    # Notify the kiosk (and any other family-events subscriber) so the open
+    # ConnectGoogleModal can dismiss itself and the member-row Google badge
+    # can flip from "not_connected" to "connected" without a manual refresh.
+    await streamer.publish_family_event(
+        member.family_id,
+        family_event_payload(
+            type="member.google_connected",
+            entity="members",
+            id=member.id,
+        ),
+    )
+
+    # Pull this member's Google Calendar immediately so their events appear
+    # on the kiosk without waiting for the next polling cycle (5 min).
+    try:
+        await _pull_member(
+            member_id=member.id,
+            family_id=member.family_id,
+            settings=settings,
+            session_factory=session_factory,
+            redis=redis,
+            crypto=crypto,
+            calendar=GoogleCalendarService(),
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort; polling will retry
+        logger.warning("immediate pull for member %s failed: %s", member.id, exc)
+
+    google_email = tokens.get("google_email") or ""
     return RedirectResponse(
         url=(
-            f"/settings?connected={member.id}"
-            f"&email={tokens.get('google_email') or ''}"
+            f"{settings.FRONTEND_BASE_URL}/connected"
+            f"?member={quote(member.name)}"
+            f"&email={quote(google_email)}"
         ),
         status_code=status.HTTP_302_FOUND,
     )

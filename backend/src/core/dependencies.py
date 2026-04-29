@@ -30,7 +30,7 @@ from src.services.member_service import MemberService
 from src.services.note_service import NoteService
 from src.services.redis_service import get_redis_client
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/pairing/start", auto_error=False)
 
 _parent_router_instance: ParentRouter | None = None
 

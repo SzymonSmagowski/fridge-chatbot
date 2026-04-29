@@ -10,6 +10,7 @@ import { NotesView } from "./notes-view";
 import { SettingsView } from "./settings-view";
 import { StatusBar } from "./status-bar";
 import { useFamilyEvents } from "@/lib/use-family-events";
+import { maybeStartPerfMonitor } from "@/lib/perf-monitor";
 import {
   ApiError,
   carsApi,
@@ -57,6 +58,8 @@ export function FridgeAppShell() {
     // the setState lives inside the awaited fetch callback, not the effect body.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
+    // Local-dev opt-in: `localStorage.perfMonitor = "1"` then reload.
+    maybeStartPerfMonitor();
   }, [refresh]);
 
   useFamilyEvents(refresh);
@@ -64,33 +67,39 @@ export function FridgeAppShell() {
   return (
     <div className={styles.fridgeRoot}>
       <AmbientLayer />
-      <StatusBar familyName={family?.name ?? m.app_shell_default_family_name()} />
-      {active === "chat" ? <ChatView /> : null}
-      {active === "notes" ? <NotesView members={members} cars={cars} /> : null}
-      {active === "calendar" ? <CalendarView members={members} cars={cars} /> : null}
-      {active === "settings" ? (
-        <SettingsView family={family} members={members} cars={cars} refresh={refresh} />
-      ) : null}
-      {loadError && active !== "settings" ? (
-        <div
-          style={{
-            position: "absolute",
-            top: 12,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "var(--card)",
-            border: "1px solid var(--border-color)",
-            color: "var(--destructive)",
-            padding: "8px 14px",
-            borderRadius: 12,
-            fontSize: 13,
-            zIndex: 30,
-          }}
-          role="status"
-        >
-          {loadError}
-        </div>
-      ) : null}
+      {/* `.appLayer` is the structural "everything that's not the tab bar"
+       * wrapper. Modals/sheets/dialogs render inside this subtree; their
+       * z-index now plays in the root stacking context (because .appLayer
+       * doesn't create one), so they reliably paint above .tabBar. */}
+      <div className={styles.appLayer}>
+        <StatusBar familyName={family?.name ?? m.app_shell_default_family_name()} />
+        {active === "chat" ? <ChatView /> : null}
+        {active === "notes" ? <NotesView members={members} cars={cars} /> : null}
+        {active === "calendar" ? <CalendarView members={members} cars={cars} /> : null}
+        {active === "settings" ? (
+          <SettingsView family={family} members={members} cars={cars} refresh={refresh} />
+        ) : null}
+        {loadError && active !== "settings" ? (
+          <div
+            style={{
+              position: "absolute",
+              top: 12,
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "var(--card)",
+              border: "1px solid var(--border-color)",
+              color: "var(--destructive)",
+              padding: "8px 14px",
+              borderRadius: 12,
+              fontSize: 13,
+              zIndex: 30,
+            }}
+            role="status"
+          >
+            {loadError}
+          </div>
+        ) : null}
+      </div>
       <BottomTabNav active={active} onChange={setActive} />
     </div>
   );

@@ -35,15 +35,15 @@ const RECONNECT_TOAST_ID = "family-events-reconnect";
 const WS_CLOSE_FAMILY_MISMATCH = 4003;
 const WS_CLOSE_INTERNAL_ERROR = 1011;
 
-type Listener = () => void;
-
-interface FamilyEventPayload {
+export interface FamilyEventPayload {
   type?: string;
   entity?: string;
   id?: string;
   actor?: string;
   ts?: string;
 }
+
+type Listener = (payload?: FamilyEventPayload) => void;
 
 /**
  * Decode the `family_id` claim from a JWT without verifying the signature.
@@ -95,10 +95,10 @@ class FamilyEventsClient {
     };
   }
 
-  private notify(): void {
+  private notify(payload?: FamilyEventPayload): void {
     for (const listener of this.listeners) {
       try {
-        listener();
+        listener(payload);
       } catch (err) {
         console.error("[family-events] listener threw", err);
       }
@@ -187,7 +187,7 @@ class FamilyEventsClient {
       // Heartbeat frames per architecture §5.11 — ignore. Also tolerate any
       // frame missing `type` as a safety net.
       if (!payload.type || payload.type === "ping") return;
-      this.notify();
+      this.notify(payload);
     };
 
     ws.onerror = () => {
@@ -200,11 +200,10 @@ class FamilyEventsClient {
 
       if (ev.code === WS_CLOSE_FAMILY_MISMATCH) {
         // Device JWT's family_id no longer matches — token is stale/revoked.
-        // Same recovery as a 401 from REST: drop the token and send the user
-        // through pairing/login on next load.
+        // Drop the token and send the user back to the pairing flow.
         clearToken();
         if (typeof window !== "undefined") {
-          window.location.assign("/login");
+          window.location.assign("/pair");
         }
         return;
       }
@@ -313,7 +312,9 @@ class FamilyEventsClient {
 
 const client = new FamilyEventsClient();
 
-export function useFamilyEvents(onChange: () => void): void {
+export function useFamilyEvents(
+  onChange: (payload?: FamilyEventPayload) => void,
+): void {
   useEffect(() => {
     return client.subscribe(onChange);
   }, [onChange]);

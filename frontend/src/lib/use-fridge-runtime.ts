@@ -15,33 +15,26 @@ import {
 } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 
-function messageToLike(m: MessageResponse): ThreadMessageLike {
+function messageToLike(msg: MessageResponse): ThreadMessageLike {
   const role: ThreadMessageLike["role"] =
-    m.role === "assistant" || m.role === "system" ? m.role : "user";
+    msg.role === "assistant" || msg.role === "system" ? msg.role : "user";
   return {
-    id: m.id,
+    id: msg.id,
     role,
-    content: [{ type: "text", text: m.content }],
-    createdAt: m.created_at ? new Date(m.created_at) : undefined,
+    content: [{ type: "text", text: msg.content }],
+    createdAt: msg.created_at ? new Date(msg.created_at) : undefined,
   };
 }
-
-type PendingAssistant = {
-  id: string;
-  text: string;
-};
 
 export function useFridgeRuntime(threadId: number | null) {
   const [messages, setMessages] = useState<readonly ThreadMessageLike[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
-  const pendingRef = useRef<PendingAssistant | null>(null);
+  const pendingAssistantIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (threadId == null) {
-      // Reset on thread change — external-sync pattern; false positive of
-      // React 19's `react-hooks/set-state-in-effect` rule.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setMessages([]);
       return;
@@ -76,21 +69,21 @@ export function useFridgeRuntime(threadId: number | null) {
     };
   }, []);
 
-  const appendMessage = useCallback((msg: ThreadMessageLike) => {
-    setMessages((prev) => [...prev, msg]);
-  }, []);
-
-  const updatePendingAssistant = useCallback((text: string) => {
-    const pending = pendingRef.current;
-    if (!pending) return;
-    pending.text = text;
+  const appendAssistantToken = useCallback((token: string) => {
+    const id = pendingAssistantIdRef.current;
+    if (!id) return;
     setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === pending.id);
+      const idx = prev.findIndex((msg) => msg.id === id);
       if (idx === -1) return prev;
+      const target = prev[idx];
+      const previousText =
+        Array.isArray(target.content) && target.content[0]?.type === "text"
+          ? target.content[0].text
+          : "";
       const next = prev.slice();
       next[idx] = {
-        ...next[idx],
-        content: [{ type: "text", text }],
+        ...target,
+        content: [{ type: "text", text: previousText + token }],
       };
       return next;
     });
@@ -113,21 +106,25 @@ export function useFridgeRuntime(threadId: number | null) {
       }
 
       const userText = message.content[0].text;
-      appendMessage({
-        id: `local-user-${Date.now()}`,
-        role: "user",
-        content: [{ type: "text", text: userText }],
-        createdAt: new Date(),
-      });
+      const userId = `user-${Date.now()}`;
+      const assistantId = `assistant-${Date.now()}`;
+      pendingAssistantIdRef.current = assistantId;
 
-      const assistantId = `local-assistant-${Date.now()}`;
-      pendingRef.current = { id: assistantId, text: "" };
-      appendMessage({
-        id: assistantId,
-        role: "assistant",
-        content: [{ type: "text", text: "" }],
-        createdAt: new Date(),
-      });
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: userId,
+          role: "user",
+          content: [{ type: "text", text: userText }],
+          createdAt: new Date(),
+        },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+          createdAt: new Date(),
+        },
+      ]);
 
       setIsRunning(true);
 
@@ -151,7 +148,6 @@ export function useFridgeRuntime(threadId: number | null) {
             type?: string;
             content?: string;
             message?: string;
-            status?: string;
             error?: string;
           };
           if (payload.error) {
@@ -163,15 +159,13 @@ export function useFridgeRuntime(threadId: number | null) {
             return;
           }
           if (payload.type === "message" && typeof payload.content === "string") {
-            const pending = pendingRef.current;
-            if (!pending) return;
-            updatePendingAssistant(pending.text + payload.content);
+            appendAssistantToken(payload.content);
           }
         });
 
         const finish = () => {
           setIsRunning(false);
-          pendingRef.current = null;
+          pendingAssistantIdRef.current = null;
           wsRef.current = null;
           resolve();
         };
@@ -187,17 +181,8 @@ export function useFridgeRuntime(threadId: number | null) {
           finish();
         });
       });
-
-      // After stream completes, refetch the thread so we pick up the real
-      // assistant message id (needed for feedback).
-      try {
-        const fresh = await apiClient.getThread(threadId);
-        setMessages(fresh.messages.map(messageToLike));
-      } catch {
-        // keep local streamed state if refetch fails
-      }
     },
-    [threadId, appendMessage, updatePendingAssistant],
+    [threadId, appendAssistantToken],
   );
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>({
@@ -205,7 +190,7 @@ export function useFridgeRuntime(threadId: number | null) {
     isRunning,
     messages,
     setMessages,
-    convertMessage: (m) => m,
+    convertMessage: (msg) => msg,
     onNew,
   });
 
