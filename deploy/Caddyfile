@@ -1,0 +1,29 @@
+# Apartment-building reverse proxy.
+# No domain yet (var.domain="" in terraform/prod.auto.tfvars), so HTTP only on
+# the static IP. When you add a domain, swap `:80` for `<domain>` and Caddy
+# will provision a Let's Encrypt cert automatically — no other changes needed.
+#
+# Routing strategy: single host, path-based. The backend serves a known set of
+# prefixes; everything else goes to the Next.js frontend.
+#
+# WebSockets: Caddy's reverse_proxy auto-handles the HTTP/1.1 upgrade for
+# /ws/* paths — no special directive needed.
+#
+# Langfuse UI is intentionally NOT exposed externally. Operator access via:
+#   gcloud compute ssh infra-vm --tunnel-through-iap -- -L 3001:langfuse-web:3000
+
+:80 {
+    # Backend handles the FastAPI surface.
+    @backend path /api/* /oauth/* /threads /threads/* /users/* /health /ws/*
+    reverse_proxy @backend fridge-backend:8001
+
+    # Everything else → Next.js frontend.
+    reverse_proxy fridge-frontend:3000
+
+    # Sensible defaults.
+    encode zstd gzip
+    log {
+        output stdout
+        format console
+    }
+}

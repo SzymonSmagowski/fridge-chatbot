@@ -1,0 +1,308 @@
+# Production stack for the apartment-building VM.
+# Lives at /srv/apps/fridge-chatbot/ on the VM. Started by deploy.sh.
+# All env vars come from the gitignored .env populated by fetch-secrets.sh.
+#
+# Service inventory (13):
+#   - caddy                    : reverse proxy, only service exposing :80
+#   - fridge-backend           : FastAPI + LangGraph (image from Artifact Registry)
+#   - fridge-frontend          : Next.js 16 (image from Artifact Registry)
+#   - postgres + postgres-init : shared DB; init creates `langfuse` + `fridge_chatbot` DBs/users
+#   - redis + redis-init       : shared cache; init creates `fridge-chatbot` ACL user
+#   - clickhouse               : Langfuse traces analytics DB
+#   - minio + minio-init       : Langfuse blob storage; init creates `langfuse` bucket
+#   - langfuse-web + langfuse-worker : observability
+#   - livekit-server           : WebRTC SFU for voice
+#
+# Volumes are bind-mounted under /srv/apps/fridge-chatbot/data/ so state survives
+# container restarts AND Spot preemption (the persistent disk holds it).
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # ----- Reverse proxy -------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy/data:/data
+      - ./data/caddy/config:/config
+    networks: [apartment]
+    depends_on: [fridge-frontend, fridge-backend]
+
+  # ----- Application: fridge-chatbot -----------------------------------------
+  fridge-backend:
+    image: ${FRIDGE_BACKEND_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    depends_on:
+      postgres-init: { condition: service_completed_successfully }
+      redis-init:    { condition: service_completed_successfully }
+    environment:
+      ENVIRONMENT: prod
+      AUTO_MIGRATE: "true"  # First deploy: migrations run on startup. Flip to "false" for hardened prod.
+      # DB
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: fridge_chatbot
+      POSTGRES_PASSWORD: ${FRIDGE_DB_PASSWORD}
+      POSTGRES_DB: fridge_chatbot
+      # Redis (with per-app ACL user)
+      REDIS_URL: redis://fridge-chatbot:${FRIDGE_REDIS_PASSWORD}@redis:6379
+      # JWT / encryption
+      SECRET_KEY: ${FRIDGE_JWT_SECRET_KEY}
+      FERNET_KEY: ${FRIDGE_FERNET_KEY}
+      BACKEND_DEBUG_API_KEY: ${FRIDGE_BACKEND_DEBUG_API_KEY}
+      # OpenAI
+      OPENAI_API_KEY: ${FRIDGE_OPENAI_API_KEY}
+      # Google OAuth
+      GOOGLE_CLIENT_ID: ${FRIDGE_GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${FRIDGE_GOOGLE_CLIENT_SECRET}
+      GOOGLE_OAUTH_REDIRECT_URI: ${PUBLIC_BASE_URL}/oauth/google/callback
+      GOOGLE_OAUTH_SCOPES: openid email profile https://www.googleapis.com/auth/calendar
+      FRONTEND_BASE_URL: ${PUBLIC_BASE_URL}
+      # CORS — production: only the public host
+      ALLOWED_ORIGINS: ${PUBLIC_BASE_URL}
+      # Langfuse
+      LANGFUSE_HOST: http://langfuse-web:3000
+      LANGFUSE_PUBLIC_KEY: ${FRIDGE_LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${FRIDGE_LANGFUSE_SECRET_KEY}
+      LANGFUSE_ENABLED: "true"
+      # LiveKit
+      LIVEKIT_URL: ws://livekit-server:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+
+  fridge-frontend:
+    image: ${FRIDGE_FRONTEND_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: ${PUBLIC_BASE_URL}
+
+  # ----- Postgres + per-DB init ---------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # One-shot. Idempotent. Creates per-app + langfuse DBs/users.
+  postgres-init:
+    image: postgres:16-alpine
+    restart: "no"
+    networks: [apartment]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      FRIDGE_DB_PASSWORD: ${FRIDGE_DB_PASSWORD}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='langfuse'" | grep -q 1 \
+          || psql -h postgres -U postgres -c "CREATE DATABASE langfuse"
+        psql -h postgres -U postgres -v fridge_pw="$$FRIDGE_DB_PASSWORD" <<-'SQL'
+          DO $$
+          BEGIN
+              IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'fridge_chatbot') THEN
+                  EXECUTE format('CREATE ROLE fridge_chatbot LOGIN PASSWORD %L', :'fridge_pw');
+              ELSE
+                  EXECUTE format('ALTER ROLE fridge_chatbot WITH LOGIN PASSWORD %L', :'fridge_pw');
+              END IF;
+          END $$;
+        SQL
+        psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='fridge_chatbot'" | grep -q 1 \
+          || psql -h postgres -U postgres -c "CREATE DATABASE fridge_chatbot OWNER fridge_chatbot"
+        psql -h postgres -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE fridge_chatbot TO fridge_chatbot"
+        echo "postgres-init: OK"
+
+  # ----- Redis + per-app ACL ------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # One-shot. Adds the fridge-chatbot ACL user with ~fridge-chatbot:* keyspace isolation.
+  redis-init:
+    image: redis:7-alpine
+    restart: "no"
+    networks: [apartment]
+    depends_on:
+      redis: { condition: service_healthy }
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        redis-cli -h redis -a "${REDIS_PASSWORD}" --no-auth-warning ACL SETUSER fridge-chatbot \
+          on ">${FRIDGE_REDIS_PASSWORD}" "~fridge-chatbot:*" "&fridge-chatbot:*" "+@all"
+        redis-cli -h redis -a "${REDIS_PASSWORD}" --no-auth-warning ACL SAVE
+        echo "redis-init: OK"
+
+  # ----- Langfuse stack (clickhouse + minio + web + worker) ------------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - ./data/clickhouse:/var/lib/clickhouse
+      - ./data/clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./data/minio:/data
+
+  minio-init:
+    image: minio/mc:latest
+    restart: "no"
+    networks: [apartment]
+    depends_on: [minio]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" >/dev/null 2>&1; do
+          sleep 2
+        done
+        mc mb --ignore-existing local/langfuse
+        echo "minio-init: OK"
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    depends_on:
+      postgres-init: { condition: service_completed_successfully }
+      clickhouse:    { condition: service_healthy }
+      redis:         { condition: service_healthy }
+      minio-init:    { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/langfuse
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_CONNECTION_STRING: redis://:${REDIS_PASSWORD}@redis:6379
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+
+  langfuse-web:
+    image: langfuse/langfuse:3
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    depends_on:
+      langfuse-worker: { condition: service_started }
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/langfuse
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_CONNECTION_STRING: redis://:${REDIS_PASSWORD}@redis:6379
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      # Auto-provision the fridge-chatbot project on first boot using the
+      # keys we generated in seed-secrets.sh. Same pattern as devcontainer.
+      LANGFUSE_INIT_ORG_ID: prodorg
+      LANGFUSE_INIT_ORG_NAME: "Production"
+      LANGFUSE_INIT_PROJECT_ID: fridge-chatbot
+      LANGFUSE_INIT_PROJECT_NAME: "Fridge Chatbot"
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${FRIDGE_LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${FRIDGE_LANGFUSE_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${ADMIN_EMAIL}
+      LANGFUSE_INIT_USER_NAME: "Admin"
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_ADMIN_PASSWORD}
+
+  # ----- LiveKit (voice/WebRTC) ---------------------------------------------
+  livekit-server:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    command:
+      - --bind=0.0.0.0
+      - --keys=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}
+    ports:
+      - "7881:7881/tcp"
+      - "50000-60000:50000-60000/udp"
+
+networks:
+  apartment:
+    name: apartment
+    driver: bridge
