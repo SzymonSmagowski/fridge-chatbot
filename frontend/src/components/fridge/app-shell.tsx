@@ -9,7 +9,9 @@ import { ChatView } from "./chat-view";
 import { NotesView } from "./notes-view";
 import { SettingsView } from "./settings-view";
 import { StatusBar } from "./status-bar";
+import { VoiceOverlay } from "./voice-overlay";
 import { useFamilyEvents } from "@/lib/use-family-events";
+import { useFridgeWakeWord } from "@/lib/use-fridge-wake-word";
 import { maybeStartPerfMonitor } from "@/lib/perf-monitor";
 import {
   ApiError,
@@ -33,6 +35,14 @@ export function FridgeAppShell() {
   const [cars, setCars] = useState<CarResponse[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [active, setActive] = useState<TabKey>("notes");
+  // Voice overlay state lives here (not in chat-view) so the wake-word
+  // listener — which runs at shell scope — can open it from any tab.
+  const [voiceOpen, setVoiceOpen] = useState(false);
+
+  useFridgeWakeWord({
+    onDetected: () => setVoiceOpen(true),
+    enabled: !voiceOpen,
+  });
 
   const refresh = useCallback(async () => {
     try {
@@ -73,7 +83,9 @@ export function FridgeAppShell() {
        * doesn't create one), so they reliably paint above .tabBar. */}
       <div className={styles.appLayer}>
         <StatusBar familyName={family?.name ?? m.app_shell_default_family_name()} />
-        {active === "chat" ? <ChatView /> : null}
+        {active === "chat" ? (
+          <ChatView onVoiceClick={() => setVoiceOpen(true)} />
+        ) : null}
         {active === "notes" ? <NotesView members={members} cars={cars} /> : null}
         {active === "calendar" ? <CalendarView members={members} cars={cars} /> : null}
         {active === "settings" ? (
@@ -101,6 +113,9 @@ export function FridgeAppShell() {
         ) : null}
       </div>
       <BottomTabNav active={active} onChange={setActive} />
+      {/* Rendered at shell scope so it overlays every tab and is reachable
+       * by both the chat-view mic button and the wake-word listener. */}
+      <VoiceOverlay open={voiceOpen} onClose={() => setVoiceOpen(false)} />
     </div>
   );
 }

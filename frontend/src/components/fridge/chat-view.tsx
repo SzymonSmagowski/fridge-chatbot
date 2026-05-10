@@ -9,6 +9,14 @@ import { ApiError, apiClient, type ThreadResponse } from "@/lib/api";
 import styles from "./fridge.module.css";
 import { m } from "@/paraglide/messages.js";
 
+type Props = {
+  /**
+   * Opens the voice overlay. Owned by `app-shell` (not chat-view) so the
+   * wake-word listener can open the same overlay from any tab.
+   */
+  onVoiceClick: () => void;
+};
+
 /**
  * Chat tab — wraps the existing assistant-ui <Thread /> + custom WS runtime.
  * Per design doc §3.3 production wiring note, this view does NOT replace the
@@ -17,8 +25,12 @@ import { m } from "@/paraglide/messages.js";
  *
  * Auto-resolves a "current" thread: lists existing threads, picks the most
  * recent, or creates a new "Fridge chat" thread on first load.
+ *
+ * Voice mode is opened from inside the chat composer (mic button next to
+ * Send) — this view just forwards the request up to `app-shell`, which owns
+ * the overlay state so wake-word activation can open it too.
  */
-export function ChatView() {
+export function ChatView({ onVoiceClick }: Props) {
   const [threadId, setThreadId] = useState<number | null>(null);
   const [bootstrapping, setBootstrapping] = useState(true);
   const runtime = useFridgeRuntime(threadId);
@@ -73,7 +85,7 @@ export function ChatView() {
             </div>
           ) : (
             <AssistantRuntimeProvider runtime={runtime}>
-              <Thread />
+              <Thread onVoiceClick={onVoiceClick} />
             </AssistantRuntimeProvider>
           )}
         </div>

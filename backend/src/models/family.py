@@ -46,6 +46,12 @@ class FamilyPreferences(Base):
     voice_wake_enabled = Column(Boolean, nullable=False, default=False)
     always_on = Column(Boolean, nullable=False, default=True)
     auto_create_shopping_list = Column(Boolean, nullable=False, default=True)
+    # Household default language for the chat + voice assistants. Values:
+    # 'auto' (detect per turn), 'en', 'pl'. Used as the *seed* locale by the
+    # detect_language node — heuristic detection on the user's message can
+    # still override when the input is unmistakably the other language.
+    # Also drives the voice agent's greeting on session start.
+    voice_locale = Column(String(8), nullable=False, default="auto")
     updated_at = Column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )

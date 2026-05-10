@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
 
+    # LiveKit (voice transport). The browser connects to LIVEKIT_PUBLIC_URL —
+    # which is host-reachable (`ws://localhost:7880` from a host browser).
+    # The voice_worker process connects from inside the container network using
+    # the service name. Both flow through the same room name + JWT.
+    LIVEKIT_URL: str = "ws://livekit-server:7880"
+    LIVEKIT_PUBLIC_URL: str = "ws://localhost:7880"
+    LIVEKIT_API_KEY: str = "devkey"
+    LIVEKIT_API_SECRET: str = "secret"
+    LIVEKIT_ROOM_PREFIX: str = "fridge"
+    LIVEKIT_TOKEN_TTL_SECONDS: int = 3600
+
     # Observability
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_PUBLIC_KEY: str | None = None

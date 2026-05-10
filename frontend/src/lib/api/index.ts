@@ -81,3 +81,6 @@ export type { SyncStateResponse } from "./calendar-sync";
 
 export { oauthApi, pairingApi } from "./oauth";
 export type { AuthorizeUrlResponse, PairingStartResponse } from "./oauth";
+
+export { livekitApi } from "./livekit";
+export type { LiveKitTokenResponse } from "./livekit";

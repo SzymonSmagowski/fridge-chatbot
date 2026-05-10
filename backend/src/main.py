@@ -23,6 +23,7 @@ from src.routes import (
     family,
     family_events_ws,
     labels,
+    livekit_token,
     members,
     notes,
     oauth,
@@ -167,6 +168,7 @@ def create_app() -> FastAPI:
     app.include_router(labels.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
     app.include_router(calendar_sync.router, prefix="/api")
+    app.include_router(livekit_token.router, prefix="/api")
 
     @app.get("/health")
     def health_check():

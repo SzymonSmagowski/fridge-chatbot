@@ -2,9 +2,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
+
+
+# `auto` = detect per turn from user input; `en` / `pl` = seed default
+# language. Used by `detect_language` graph node and the voice greeting.
+VoiceLocale = Literal["auto", "en", "pl"]
 
 
 class FamilyResponse(BaseModel):
@@ -30,6 +36,7 @@ class FamilyPreferencesResponse(BaseModel):
     voice_wake_enabled: bool
     always_on: bool
     auto_create_shopping_list: bool
+    voice_locale: VoiceLocale
     updated_at: datetime
 
 
@@ -39,3 +46,4 @@ class FamilyPreferencesPatch(BaseModel):
     voice_wake_enabled: bool | None = None
     always_on: bool | None = None
     auto_create_shopping_list: bool | None = None
+    voice_locale: VoiceLocale | None = None

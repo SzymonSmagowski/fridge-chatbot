@@ -635,7 +635,7 @@ function PreferencesPanel({
       />
       <PrefToggleRow
         title="Voice wake phrase"
-        sub='"Hey Fridge" — coming in v1.1.'
+        sub='"Hey Jarvis" passive listener — currently always on; toggle is a UI hook for a follow-up.'
         value={prefs.voice_wake_enabled}
         onChange={(v) => void onChange({ voice_wake_enabled: v })}
         disabled

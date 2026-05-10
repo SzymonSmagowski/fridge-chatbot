@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
+from dateutil.rrule import rrulestr
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,7 @@ from src.models import (
     EventTargetSyncStatus,
     ExternalEventCacheRow,
     Family,
+    Member,
 )
 from src.schemas.events import (
     EventCreateRequest,
@@ -158,6 +160,8 @@ class EventService:
 
     # ---- writes ------------------------------------------------------------
     async def create(self, data: EventCreateRequest) -> tuple[Event, list[EventTargetPlan]]:
+        self._validate_create(data)
+
         family = self.db.query(Family).filter(Family.id == self.family_id).first()
         fallback_tz = family.timezone if family else "UTC"
 
@@ -314,6 +318,73 @@ class EventService:
             created_at=ev.created_at,
             updated_at=ev.updated_at,
         )
+
+    # ---- validation --------------------------------------------------------
+    def _validate_create(self, data: EventCreateRequest) -> None:
+        """Server-side validation for chat-tool / API event creation.
+
+        Pydantic enforces field types + title length; this layer enforces
+        cross-field invariants (start/end ordering), RRULE syntax, and
+        family-ownership for FKs the request supplies.
+        """
+        if data.end_at < data.start_at:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "events.invalid_time_range",
+                    "detail": "end_at must be on or after start_at",
+                },
+            )
+
+        if data.rrule:
+            try:
+                rrulestr(data.rrule, dtstart=data.start_at)
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "events.invalid_rrule",
+                        "detail": f"Malformed RRULE {data.rrule!r}: {exc}",
+                    },
+                ) from exc
+
+        if data.assignee_member_id is not None:
+            in_family = (
+                self.db.query(Member.id)
+                .filter(
+                    Member.id == data.assignee_member_id,
+                    Member.family_id == self.family_id,
+                )
+                .first()
+            )
+            if in_family is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "code": "members.not_found",
+                        "detail": "Assignee member not found",
+                    },
+                )
+
+        if data.car_ids:
+            owned = {
+                row[0]
+                for row in self.db.query(Car.id)
+                .filter(
+                    Car.family_id == self.family_id,
+                    Car.id.in_(data.car_ids),
+                )
+                .all()
+            }
+            missing = [c for c in data.car_ids if c not in owned]
+            if missing:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "code": "cars.not_found",
+                        "detail": "One or more car_ids not found in this family",
+                    },
+                )
 
     def _with_car_decoration(
         self, description: str | None, car_ids: list[UUID]

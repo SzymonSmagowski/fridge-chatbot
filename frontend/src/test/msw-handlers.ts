@@ -36,6 +36,7 @@ export const FIXTURE_PREFERENCES: FamilyPreferencesResponse = {
   voice_wake_enabled: false,
   always_on: true,
   auto_create_shopping_list: true,
+  voice_locale: "auto",
   updated_at: "2026-04-20T09:00:00Z",
 };
 

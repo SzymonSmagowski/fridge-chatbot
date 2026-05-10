@@ -28,6 +28,13 @@ class Thread(Base):
     thread_id = Column(UUID, default=uuid.uuid4, unique=True, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     title = Column(String(200), nullable=True)
+    # Running compaction of older messages — lets long chats keep working
+    # without replaying every message into the LLM context. Regenerated
+    # periodically by `summary_service.maybe_summarize_thread`.
+    # `summary_through_message_id` is the `messages.id` PK of the last
+    # message folded into `summary`; anything newer is replayed verbatim.
+    summary = Column(Text, nullable=True)
+    summary_through_message_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

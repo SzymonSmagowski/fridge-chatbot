@@ -24,13 +24,24 @@ import {
   ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
+  MicIcon,
   MoreHorizontalIcon,
   SquareIcon,
 } from "lucide-react";
 import type { FC } from "react";
 import { m } from "@/paraglide/messages.js";
 
-export const Thread: FC = () => {
+export type ThreadProps = {
+  /**
+   * If supplied, a microphone icon is rendered next to the Send button in the
+   * composer's action row. Tapping it calls this handler — used by the kiosk's
+   * `chat-view` to open the voice overlay. When omitted, the mic button is not
+   * rendered, keeping `<Thread />` reusable in non-voice contexts.
+   */
+  onVoiceClick?: () => void;
+};
+
+export const Thread: FC<ThreadProps> = ({ onVoiceClick }) => {
   return (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-background"
@@ -61,7 +72,7 @@ export const Thread: FC = () => {
 
           <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mt-auto flex flex-col gap-4 overflow-visible rounded-t-(--composer-radius) bg-background pb-4 md:pb-6">
             <ThreadScrollToBottom />
-            <Composer />
+            <Composer onVoiceClick={onVoiceClick} />
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>
@@ -120,7 +131,7 @@ const ThreadSuggestionItem: FC = () => {
   );
 };
 
-const Composer: FC = () => {
+const Composer: FC<{ onVoiceClick?: () => void }> = ({ onVoiceClick }) => {
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <div data-slot="aui_composer-shell" className="flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-background p-(--composer-padding) transition-shadow focus-within:border-ring/75 focus-within:ring-2 focus-within:ring-ring/20">
@@ -131,15 +142,29 @@ const Composer: FC = () => {
           autoFocus
           aria-label={m.chat_composer_aria()}
         />
-        <ComposerAction />
+        <ComposerAction onVoiceClick={onVoiceClick} />
       </div>
     </ComposerPrimitive.Root>
   );
 };
 
-const ComposerAction: FC = () => {
+const ComposerAction: FC<{ onVoiceClick?: () => void }> = ({ onVoiceClick }) => {
   return (
-    <div className="aui-composer-action-wrapper relative flex items-center justify-end">
+    <div className="aui-composer-action-wrapper relative flex items-center justify-end gap-1">
+      {onVoiceClick && (
+        <TooltipIconButton
+          tooltip={m.chat_composer_voice_aria()}
+          side="bottom"
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="aui-composer-voice size-8 rounded-full text-muted-foreground hover:text-foreground"
+          aria-label={m.chat_composer_voice_aria()}
+          onClick={onVoiceClick}
+        >
+          <MicIcon className="size-4" />
+        </TooltipIconButton>
+      )}
       <AuiIf condition={(s) => !s.thread.isRunning}>
         <ComposerPrimitive.Send render={<TooltipIconButton tooltip={m.chat_composer_send_aria()} side="bottom" type="button" variant="default" size="icon" className="aui-composer-send size-8 rounded-full" aria-label={m.chat_composer_send_aria()} />}><ArrowUpIcon className="aui-composer-send-icon size-4" /></ComposerPrimitive.Send>
       </AuiIf>

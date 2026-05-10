@@ -2348,3 +2348,231 @@
     display: none !important;
   }
 }
+
+/* ----- Voice overlay -------------------------------------------------------
+ * Full-viewport overlay that opens above the chat composer when the user taps
+ * the mic button. Backdrop is semi-transparent + blurred so the kiosk shell
+ * (status bar, tab bar, chat behind) stays visible — voice is a *mode* layered
+ * on the app, not a separate route. The orb's animation is driven by a
+ * `data-state` attribute (idle | connecting | listening | thinking | speaking)
+ * mirrored from `useVoiceAssistant().state` + the local mic-on flag. Three
+ * ring pseudo-children animate differently per state. */
+.voiceOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  animation: voiceOverlayFade 180ms ease-out;
+}
+
+@keyframes voiceOverlayFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.voiceClose {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 44px;
+  height: 44px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease;
+}
+.voiceClose:hover { background: rgba(255, 255, 255, 0.22); }
+.voiceClose:active { transform: scale(0.94); }
+
+.voiceCenter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.75rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.voiceTitle {
+  color: #f8fafc;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+.voiceSubtitle {
+  color: rgba(248, 250, 252, 0.78);
+  font-size: 0.95rem;
+  max-width: 32rem;
+}
+
+.voiceStatus {
+  color: rgba(248, 250, 252, 0.86);
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  min-height: 1.5em;
+  transition: color 200ms ease;
+}
+
+/* Orb — the central animated mic button. Sized in vmin so it scales down on
+ * narrow phones but caps out at 280px on the kiosk landscape display. */
+.voiceOrb {
+  position: relative;
+  width: min(48vmin, 260px);
+  height: min(48vmin, 260px);
+  border-radius: 9999px;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  isolation: isolate;
+  transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.voiceOrb:active { transform: scale(0.96); }
+.voiceOrb:focus-visible {
+  outline: 3px solid rgba(96, 165, 250, 0.7);
+  outline-offset: 8px;
+}
+
+/* Inner core — the actual coloured circle that holds the mic icon. */
+.voiceOrbCore {
+  position: relative;
+  z-index: 2;
+  width: 70%;
+  height: 70%;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  background: radial-gradient(circle at 30% 30%, #94a3b8 0%, #334155 100%);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35), inset 0 0 24px rgba(255, 255, 255, 0.08);
+  transition: background 320ms ease, box-shadow 320ms ease;
+}
+
+/* Ring elements — three concentric circles behind the core. Default = hidden;
+ * each `data-state` switches them on with a different animation. */
+.voiceOrbRing {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+  opacity: 0;
+}
+.voiceOrbRing:nth-child(1) { z-index: 1; }
+.voiceOrbRing:nth-child(2) { z-index: 1; }
+.voiceOrbRing:nth-child(3) { z-index: 1; }
+
+/* === idle (mic off, agent connected but not listening) ====================
+ * Soft slow breath on the core; rings invisible. */
+.voiceOrb[data-state="idle"] .voiceOrbCore {
+  background: radial-gradient(circle at 30% 30%, #cbd5e1 0%, #475569 100%);
+  animation: voiceBreath 3.6s ease-in-out infinite;
+}
+
+/* === connecting (token fetched, room joining) =============================
+ * Faint single ring slowly expanding while the user waits. */
+.voiceOrb[data-state="connecting"] .voiceOrbCore {
+  background: radial-gradient(circle at 30% 30%, #cbd5e1 0%, #475569 100%);
+  animation: voiceBreath 1.6s ease-in-out infinite;
+}
+.voiceOrb[data-state="connecting"] .voiceOrbRing:nth-child(1) {
+  border: 2px solid rgba(148, 163, 184, 0.5);
+  animation: voiceRipple 1.8s ease-out infinite;
+}
+
+/* === listening (mic hot, user speaking) ===================================
+ * Green core, three staggered ripples expanding outward — mimics audio waves
+ * radiating from the mic. */
+.voiceOrb[data-state="listening"] .voiceOrbCore {
+  background: radial-gradient(circle at 30% 30%, #34d399 0%, #047857 100%);
+  box-shadow: 0 0 60px rgba(52, 211, 153, 0.55), 0 12px 40px rgba(0, 0, 0, 0.35);
+  animation: voiceBreath 2.2s ease-in-out infinite;
+}
+.voiceOrb[data-state="listening"] .voiceOrbRing {
+  border: 2px solid rgba(52, 211, 153, 0.55);
+  animation: voiceRipple 2.2s ease-out infinite;
+}
+.voiceOrb[data-state="listening"] .voiceOrbRing:nth-child(2) { animation-delay: 0.55s; }
+.voiceOrb[data-state="listening"] .voiceOrbRing:nth-child(3) { animation-delay: 1.1s; }
+
+/* === thinking (LLM/tool turn between mic-stop and TTS) ====================
+ * Violet core, three small dots orbiting in a circle — classic "thinking"
+ * affordance. Rings repurposed as orbiting tracks; each holds a single
+ * pseudo-dot that revolves. */
+.voiceOrb[data-state="thinking"] .voiceOrbCore {
+  background: radial-gradient(circle at 30% 30%, #c4b5fd 0%, #6d28d9 100%);
+  box-shadow: 0 0 50px rgba(139, 92, 246, 0.5), 0 12px 40px rgba(0, 0, 0, 0.35);
+  animation: voiceBreath 1.4s ease-in-out infinite;
+}
+.voiceOrb[data-state="thinking"] .voiceOrbRing {
+  opacity: 1;
+  border: none;
+  animation: voiceOrbit 1.6s linear infinite;
+}
+.voiceOrb[data-state="thinking"] .voiceOrbRing:nth-child(2) { animation-delay: -0.53s; }
+.voiceOrb[data-state="thinking"] .voiceOrbRing:nth-child(3) { animation-delay: -1.06s; }
+.voiceOrb[data-state="thinking"] .voiceOrbRing::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  border-radius: 9999px;
+  background: rgba(196, 181, 253, 0.95);
+  box-shadow: 0 0 12px rgba(196, 181, 253, 0.8);
+}
+
+/* === speaking (TTS playing) ===============================================
+ * Blue core, fast outward ripples — synchronized waves giving "voice
+ * coming out" energy. Slightly different cadence from listening so the
+ * states are visually distinct. */
+.voiceOrb[data-state="speaking"] .voiceOrbCore {
+  background: radial-gradient(circle at 30% 30%, #60a5fa 0%, #1d4ed8 100%);
+  box-shadow: 0 0 60px rgba(96, 165, 250, 0.6), 0 12px 40px rgba(0, 0, 0, 0.35);
+  animation: voiceBreath 0.9s ease-in-out infinite;
+}
+.voiceOrb[data-state="speaking"] .voiceOrbRing {
+  border: 2px solid rgba(96, 165, 250, 0.6);
+  animation: voiceRipple 1.3s ease-out infinite;
+}
+.voiceOrb[data-state="speaking"] .voiceOrbRing:nth-child(2) { animation-delay: 0.35s; }
+.voiceOrb[data-state="speaking"] .voiceOrbRing:nth-child(3) { animation-delay: 0.7s; }
+
+/* Shared keyframes */
+@keyframes voiceBreath {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+@keyframes voiceRipple {
+  0%   { transform: scale(0.85); opacity: 0.7; }
+  80%  { opacity: 0;             }
+  100% { transform: scale(1.55); opacity: 0; }
+}
+@keyframes voiceOrbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Reduced motion: keep the colour signal but stop the heavy animations. */
+@media (prefers-reduced-motion: reduce) {
+  .voiceOrbCore,
+  .voiceOrb[data-state] .voiceOrbCore,
+  .voiceOrb[data-state] .voiceOrbRing {
+    animation: none !important;
+  }
+  .voiceOverlay { animation: none !important; }
+}

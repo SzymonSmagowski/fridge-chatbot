@@ -11,6 +11,7 @@ export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
+BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 RESET='\033[0m'
@@ -49,6 +50,14 @@ command -v pnpm   >/dev/null || { printf "%b✗ pnpm not on PATH — run 'corepa
 
 printf "%b● backend%b  → http://localhost:8001\n"  "$CYAN"    "$RESET"
 printf "%b● frontend%b → http://localhost:3000\n"  "$MAGENTA" "$RESET"
+printf "%b● voice%b    → LiveKit worker (needs OPENAI_API_KEY; exits cleanly without one)\n" "$BLUE" "$RESET"
+echo ""
+
+# Wake-word model files (~3.7 MB) live outside the repo; pull on first run.
+# Idempotent — skips files that already exist.
+if [ -x "$FRONTEND_DIR/scripts/download-wake-word-models.sh" ]; then
+    "$FRONTEND_DIR/scripts/download-wake-word-models.sh" 2>&1 | prefix "$YELLOW" "wake-word-setup" || true
+fi
 echo ""
 
 # `exec` inside the subshell so the real process (poetry / pnpm) replaces the
@@ -56,7 +65,13 @@ echo ""
 # and next-server cleanly.
 ( cd "$BACKEND_DIR"  && exec ./run.sh     ) 2>&1 | prefix "$CYAN"    "backend"  &
 ( cd "$FRONTEND_DIR" && exec pnpm dev     ) 2>&1 | prefix "$MAGENTA" "frontend" &
+# voice_worker is a separate Python process that joins the LiveKit room as the
+# Agent. Without it, the `/voice` overlay sits forever on "Waking up…" because
+# `useVoiceAssistant().agent` never resolves. The worker exits cleanly if
+# OPENAI_API_KEY is missing — the other two services keep running, so this
+# doesn't break dev for backend-only / frontend-only work.
+( cd "$BACKEND_DIR"  && exec poetry run python -m src.voice_worker.worker dev ) 2>&1 | prefix "$BLUE" "voice" &
 
-# If either service exits, tear down the other.
+# If any service exits, tear down the others.
 wait -n
 cleanup

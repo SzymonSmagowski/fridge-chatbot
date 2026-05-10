@@ -82,6 +82,21 @@ pnpm test:e2e      # Playwright (26 tests) — backend must be running
 
 `.env.local` is gitignored. `.env.example` is checked in.
 
+## Wake-word activation
+
+The kiosk listens passively for "Hey Jarvis" and opens the voice overlay automatically when it hears it. Pipeline:
+
+- **Audio capture:** `AudioWorkletNode` at 16 kHz mono → 80 ms (1280-sample) chunks → main thread.
+- **Inference:** `onnxruntime-web` (WASM) running three openWakeWord models in sequence — `melspectrogram.onnx` → `embedding_model.onnx` (Google `speech_embedding`) → `hey_jarvis_v0.1.onnx`. Implementation in `src/lib/wake-word-pipeline.ts`.
+- **Detection threshold:** 0.5 probability; 2-second cooldown between triggers (suppresses double-fires from a single utterance).
+- **Mic arbitration:** while the voice overlay is open, the listener is paused so LiveKit can claim the mic without a fight (`enabled={!voiceOpen}` in `app-shell.tsx`).
+
+**Setup is automatic** — `dev.sh` calls `scripts/download-wake-word-models.sh` to fetch the three ONNX files (~3.7 MB total) from the openWakeWord v0.5.1 GitHub release on first start. The script is idempotent. Models live in `public/wake-words/` (gitignored).
+
+**No API key, no account, no licence, no expiry.** openWakeWord is Apache-2.0; mic audio never leaves the device.
+
+**Why "Hey Jarvis" and not "Hej lodówko":** openWakeWord ships pretrained classifiers for ~10 English phrases. Custom phrases (Polish included) require training a new classifier — synthetic data via Piper TTS + ~30 min on a free Colab GPU. The wake word is just a *trigger*; once the overlay opens, the LangGraph `detect_language` node picks Polish/English per turn from the actual content. Training a "Hej lodówko" classifier is a future single-afternoon project; the wiring already supports a swappable `.onnx` (just change the path + tensor names in `wake-word-pipeline.ts`).
+
 ## Adding components
 
 ```bash

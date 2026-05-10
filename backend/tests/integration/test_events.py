@@ -218,6 +218,121 @@ def test_post_event_with_empty_title_returns_422(
     assert resp.status_code == 422
 
 
+def test_post_event_with_end_before_start_returns_400(
+    client: TestClient, auth_headers, monkeypatch
+) -> None:
+    """Service-layer validation: end_at must be >= start_at."""
+    from src.routes import events as events_route
+    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+
+    resp = client.post(
+        "/api/events",
+        headers=auth_headers,
+        json={
+            "title": "Backwards",
+            "start_at": "2026-05-01T11:00:00+00:00",
+            "end_at": "2026-05-01T10:00:00+00:00",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "events.invalid_time_range"
+
+
+def test_post_event_with_malformed_rrule_returns_400(
+    client: TestClient, auth_headers, monkeypatch
+) -> None:
+    """Service-layer validation: rrule must parse via dateutil.rrulestr."""
+    from src.routes import events as events_route
+    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+
+    resp = client.post(
+        "/api/events",
+        headers=auth_headers,
+        json={
+            "title": "Recurring",
+            "start_at": "2026-05-01T10:00:00+00:00",
+            "end_at": "2026-05-01T11:00:00+00:00",
+            "rrule": "FREQ=NOT_A_REAL_FREQ;INTERVAL=oops",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "events.invalid_rrule"
+    assert "FREQ=NOT_A_REAL_FREQ" in resp.json()["detail"]["detail"]
+
+
+def test_post_event_with_valid_rrule_succeeds(
+    client: TestClient, auth_headers, monkeypatch
+) -> None:
+    """Sanity check: a syntactically valid RRULE passes validation."""
+    from src.routes import events as events_route
+    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+
+    resp = client.post(
+        "/api/events",
+        headers=auth_headers,
+        json={
+            "title": "Weekly",
+            "start_at": "2026-05-01T10:00:00+00:00",
+            "end_at": "2026-05-01T11:00:00+00:00",
+            "rrule": "FREQ=WEEKLY;COUNT=5",
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["rrule"] == "FREQ=WEEKLY;COUNT=5"
+
+
+def test_post_event_with_cross_family_assignee_returns_404(
+    client: TestClient, auth_headers, db, make_family, monkeypatch
+) -> None:
+    """Family-ownership check: assignee_member_id from another family is rejected."""
+    from src.routes import events as events_route
+    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+
+    other_family_id, _, _ = make_family(family_name="Other Family")
+    intruder = _create_member_via_db(db, other_family_id, name="Intruder")
+
+    resp = client.post(
+        "/api/events",
+        headers=auth_headers,
+        json={
+            "title": "Cross-family",
+            "start_at": "2026-05-01T10:00:00+00:00",
+            "end_at": "2026-05-01T11:00:00+00:00",
+            "assignee_member_id": str(intruder.id),
+        },
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "members.not_found"
+
+
+def test_post_event_with_cross_family_car_returns_404(
+    client: TestClient, auth_headers, make_family, monkeypatch
+) -> None:
+    """Family-ownership check: car_ids from another family are rejected."""
+    from src.routes import events as events_route
+    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+
+    _other_family, _device, other_token = make_family(family_name="Other Family")
+    other_car = client.post(
+        "/api/cars",
+        headers={"Authorization": f"Bearer {other_token}"},
+        json={"name": "Stranger Volvo"},
+    ).json()
+
+    resp = client.post(
+        "/api/events",
+        headers=auth_headers,
+        json={
+            "title": "Cross-family car",
+            "start_at": "2026-05-01T10:00:00+00:00",
+            "end_at": "2026-05-01T11:00:00+00:00",
+            "car_ids": [other_car["id"]],
+        },
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "cars.not_found"
+
+
 # ---------------------------------------------------------------------------
 # GET / list
 # ---------------------------------------------------------------------------

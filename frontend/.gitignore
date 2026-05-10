@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+# Playwright test artifacts (videos, traces, screenshots from failed runs).
+/test-results
 
 # next.js
 /.next/
@@ -39,3 +41,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# wake-word ONNX model files (downloaded on first dev run, ~3.7 MB total)
+public/wake-words/*.onnx
