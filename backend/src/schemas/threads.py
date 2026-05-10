@@ -27,8 +27,27 @@ class ThreadResponse(BaseModel):
         from_attributes = True
 
 
-class ThreadMessagesResponse(ThreadResponse):
+class MessagesPageResponse(BaseModel):
+    """Cursor-paginated chat history page envelope.
+
+    Used by both `GET /threads/{id}/messages` and the messages-bearing portion
+    of `GET /threads/{id}` (via composition into ThreadMessagesResponse).
+    Wire order is newest-first; `next_cursor` points at the OLDEST message in
+    the page (the last array element). FE re-uses next_cursor as `before` to
+    fetch the next-older page.
+    """
+
     messages: List[MessageResponse]
+    has_more: bool
+    next_cursor: Optional[str] = None
+
+
+class ThreadMessagesResponse(ThreadResponse):
+    """Initial thread-open response: thread metadata + the latest 30 messages."""
+
+    messages: List[MessageResponse]
+    has_more: bool
+    next_cursor: Optional[str] = None
 
 
 class ThreadCreate(BaseModel):

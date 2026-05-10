@@ -404,5 +404,22 @@
     }
   }],
 
-  "members_default_section_subtitle": "People who are assigned to notes and whose calendars sync to the fridge."
+  "members_default_section_subtitle": "People who are assigned to notes and whose calendars sync to the fridge.",
+
+  "feedback_button_label": "Send feedback",
+  "feedback_modal_title": "Send feedback",
+  "feedback_modal_description": "Tell the team what's broken or what you'd like the fridge to do. We read every note.",
+  "feedback_category_bug": "Bug",
+  "feedback_category_improvement": "Improvement",
+  "feedback_category_question": "Question",
+  "feedback_category_other": "Other",
+  "feedback_message_placeholder": "Tell us what's not working or what you'd like…",
+  "feedback_submit": "Send",
+  "feedback_cancel": "Cancel",
+  "feedback_success_toast": "Thanks — your feedback was logged.",
+  "feedback_error_toast": "Couldn't send feedback. Try again?",
+  "feedback_rate_limit_toast": "Please wait a moment before sending again.",
+
+  "chat_loading_older": "Loading earlier messages…",
+  "chat_history_start": "This is the beginning of the conversation."
 }

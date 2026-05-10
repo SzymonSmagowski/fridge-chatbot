@@ -15,6 +15,7 @@ from src.core.dependencies import (
 from src.core.migrations import run_alembic_upgrade
 from src.core.rate_limit import get_limiter, rate_limit_exceeded_handler
 from src.core.resource_monitor import run_resource_monitor
+from src.core.startup_guards import validate_production_secrets
 from src.db.shared_engine import get_session_factory
 from src.routes import (
     calendar_sync,
@@ -22,6 +23,7 @@ from src.routes import (
     events,
     family,
     family_events_ws,
+    feedback,
     labels,
     livekit_token,
     members,
@@ -49,6 +51,10 @@ async def lifespan(app: FastAPI):
     global _polling_task, _polling_stop, _resource_task, _resource_stop
 
     settings = get_settings()
+
+    # Refuse to boot in prod with published-default secrets or localhost CORS.
+    # No-op in dev. See core/startup_guards.py.
+    validate_production_secrets(settings)
 
     if not settings.OPENAI_API_KEY:
         logger.warning(
@@ -169,6 +175,7 @@ def create_app() -> FastAPI:
     app.include_router(events.router, prefix="/api")
     app.include_router(calendar_sync.router, prefix="/api")
     app.include_router(livekit_token.router, prefix="/api")
+    app.include_router(feedback.router, prefix="/api")
 
     @app.get("/health")
     def health_check():

@@ -1,6 +1,8 @@
+from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from src.core.settings import Settings
@@ -81,25 +83,36 @@ class DatabaseOperationsService:
         self.db.refresh(msg)
         return msg
 
-    async def get_formatted_thread_messages(self, thread_uuid: UUID) -> List[dict]:
-        messages = (
-            self.db.query(Message)
-            .filter(Message.thread_id == thread_uuid)
-            .order_by(Message.created_at.asc())
+    async def list_thread_messages_page(
+        self,
+        thread_uuid: UUID,
+        *,
+        before: Optional[tuple[datetime, UUID]],
+        limit: int,
+    ) -> tuple[List[Message], bool]:
+        """Cursor-paginated, newest-first message page.
+
+        `before` is a (created_at, message_id) tuple — emulated tuple
+        comparison so two messages with equal `created_at` are still totally
+        ordered by `message_id`. Fetches `limit + 1` rows so we can compute
+        `has_more` cheaply without a COUNT.
+        """
+        q = self.db.query(Message).filter(Message.thread_id == thread_uuid)
+        if before is not None:
+            ts, mid = before
+            q = q.filter(
+                or_(
+                    Message.created_at < ts,
+                    and_(Message.created_at == ts, Message.message_id < mid),
+                )
+            )
+        rows = (
+            q.order_by(Message.created_at.desc(), Message.message_id.desc())
+            .limit(limit + 1)
             .all()
         )
-        return [
-            {
-                "id": str(m.message_id),
-                "role": m.role,
-                "content": m.content,
-                "type": m.type,
-                "created_at": m.created_at.isoformat(),
-                "score": m.score,
-                "comment": m.comment,
-            }
-            for m in messages
-        ]
+        has_more = len(rows) > limit
+        return rows[:limit], has_more
 
     async def get_message_by_uuid(self, message_uuid: UUID) -> Optional[Message]:
         return self.db.query(Message).filter(Message.message_id == message_uuid).first()

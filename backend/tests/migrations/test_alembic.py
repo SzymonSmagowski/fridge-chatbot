@@ -140,3 +140,114 @@ def test_alembic_upgrade_then_downgrade_then_upgrade_is_idempotent(
     command.upgrade(cfg, "head")
     after_second = _table_names(sandbox_url)
     assert after_second == after_first
+
+
+# ---------------------------------------------------------------------------
+# Spot-checks for the new 0005 + 0006 migrations (Tier B/11 in the orch brief)
+# ---------------------------------------------------------------------------
+
+
+def _index_names(url: str, table: str) -> set[str]:
+    eng = create_engine(url)
+    try:
+        return {idx["name"] for idx in inspect(eng).get_indexes(table)}
+    finally:
+        eng.dispose()
+
+
+def test_alembic_0005_creates_messages_pagination_index(
+    sandbox_url: str, alembic_env
+) -> None:
+    cfg = _config(sandbox_url)
+    command.upgrade(cfg, "head")
+    indexes = _index_names(sandbox_url, "messages")
+    assert "ix_messages_thread_created_id" in indexes, (
+        f"messages pagination composite index missing; have: {indexes}"
+    )
+
+
+def test_alembic_0006_creates_feedback_table_with_expected_indexes(
+    sandbox_url: str, alembic_env
+) -> None:
+    cfg = _config(sandbox_url)
+    command.upgrade(cfg, "head")
+    tables = _table_names(sandbox_url)
+    assert "feedback" in tables
+    indexes = _index_names(sandbox_url, "feedback")
+    expected = {
+        "ix_feedback_family_id",
+        "ix_feedback_family_created",
+        "ix_feedback_family_status",
+    }
+    assert expected.issubset(indexes), (
+        f"feedback table missing expected indexes: have {indexes}, "
+        f"need {expected}"
+    )
+
+
+def test_alembic_0006_creates_three_feedback_enums(
+    sandbox_url: str, alembic_env
+) -> None:
+    cfg = _config(sandbox_url)
+    command.upgrade(cfg, "head")
+    eng = create_engine(sandbox_url)
+    try:
+        with eng.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT typname FROM pg_type "
+                    "WHERE typname IN ("
+                    "'feedback_category','feedback_author_kind','feedback_status'"
+                    ")"
+                )
+            ).all()
+            names = {r[0] for r in rows}
+    finally:
+        eng.dispose()
+    assert names == {
+        "feedback_category",
+        "feedback_author_kind",
+        "feedback_status",
+    }, f"Expected 3 feedback enums in pg_type, got: {names}"
+
+
+def test_alembic_downgrading_past_0006_drops_feedback_table_and_enums(
+    sandbox_url: str, alembic_env
+) -> None:
+    """Down-migration must drop both the table AND the supporting enums.
+    Otherwise a re-upgrade would fail with `type already exists`.
+    """
+    cfg = _config(sandbox_url)
+    command.upgrade(cfg, "head")
+    # Verify pre-state.
+    assert "feedback" in _table_names(sandbox_url)
+
+    # Step down ONE migration (back to 0005). 0006 down() drops table + enums.
+    command.downgrade(cfg, "0005_messages_pagination_index")
+    after = _table_names(sandbox_url)
+    assert "feedback" not in after, (
+        "0006 downgrade did not drop the feedback table"
+    )
+
+    eng = create_engine(sandbox_url)
+    try:
+        with eng.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT typname FROM pg_type "
+                    "WHERE typname IN ("
+                    "'feedback_category','feedback_author_kind','feedback_status'"
+                    ")"
+                )
+            ).all()
+            leftover_enums = {r[0] for r in rows}
+    finally:
+        eng.dispose()
+    assert leftover_enums == set(), (
+        "0006 downgrade left feedback enums behind in pg_type: "
+        f"{leftover_enums}"
+    )
+
+    # Re-upgrade must succeed (idempotent).
+    command.upgrade(cfg, "head")
+    assert "feedback" in _table_names(sandbox_url)

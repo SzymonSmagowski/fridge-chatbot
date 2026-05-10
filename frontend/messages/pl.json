@@ -414,5 +414,22 @@
     }
   }],
 
-  "members_default_section_subtitle": "Osoby, które można przypisywać do notatek i których kalendarze trafiają na lodówkę."
+  "members_default_section_subtitle": "Osoby, które można przypisywać do notatek i których kalendarze trafiają na lodówkę.",
+
+  "feedback_button_label": "Wyślij opinię",
+  "feedback_modal_title": "Wyślij opinię",
+  "feedback_modal_description": "Powiedz zespołowi, co nie działa albo co chciał(a)byś, żeby lodówka potrafiła. Czytamy każdą wiadomość.",
+  "feedback_category_bug": "Błąd",
+  "feedback_category_improvement": "Pomysł",
+  "feedback_category_question": "Pytanie",
+  "feedback_category_other": "Inne",
+  "feedback_message_placeholder": "Napisz, co nie działa albo co chciał(a)byś dodać…",
+  "feedback_submit": "Wyślij",
+  "feedback_cancel": "Anuluj",
+  "feedback_success_toast": "Dzięki — twoja opinia trafiła do zespołu.",
+  "feedback_error_toast": "Nie udało się wysłać opinii. Spróbuj jeszcze raz?",
+  "feedback_rate_limit_toast": "Poczekaj chwilę przed kolejną próbą.",
+
+  "chat_loading_older": "Wczytuję starsze wiadomości…",
+  "chat_history_start": "Tu zaczyna się rozmowa."
 }

@@ -1,5 +1,5 @@
 "use client";
-import { Check, Clock, LogIn, MoreHorizontal, Pencil, Plus, RefreshCw } from "lucide-react";
+import { Check, Clock, LogIn, MessageSquare, MoreHorizontal, Pencil, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import styles from "./fridge.module.css";
@@ -9,6 +9,7 @@ import { CarAvatar } from "./car-avatar";
 import { ConfirmDialog } from "./confirm-dialog";
 import { ConnectGoogleModal } from "./connect-google-modal";
 import { ErrorBanner } from "./error-banner";
+import { FeedbackModal } from "./feedback-modal";
 import { LanguageSwitcher } from "./language-switcher";
 import { MemberAvatar } from "./member-avatar";
 import { TabHeader } from "./tab-header";
@@ -73,6 +74,8 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
     memberId: string;
     memberName: string;
   } | null>(null);
+
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   const fetchPrefs = useCallback(async () => {
     try {
@@ -366,6 +369,21 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
                 <LanguageSwitcher />
               </div>
             </div>
+
+            <div className={styles.settingsCard}>
+              <h3>{m.feedback_modal_title()}</h3>
+              <div className={styles.sub}>{m.feedback_modal_description()}</div>
+              <div style={{ marginTop: 14 }}>
+                <button
+                  type="button"
+                  className={`${styles.btn} ${styles.btnPrimary} ${styles.btnSmall}`}
+                  onClick={() => setFeedbackOpen(true)}
+                >
+                  <MessageSquare size={16} strokeWidth={2.2} />
+                  {m.feedback_button_label()}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -403,6 +421,12 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
         memberId={connectTarget?.memberId ?? null}
         memberName={connectTarget?.memberName ?? null}
         onClose={onConnectComplete}
+      />
+
+      <FeedbackModal
+        open={feedbackOpen}
+        threadId={null}
+        onClose={() => setFeedbackOpen(false)}
       />
     </section>
   );

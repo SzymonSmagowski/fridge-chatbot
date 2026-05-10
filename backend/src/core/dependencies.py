@@ -21,6 +21,7 @@ from src.services.event_service import EventService
 from src.services.event_target_resolver import EventTargetResolver
 from src.services.family_preferences_service import FamilyPreferencesService
 from src.services.family_service import FamilyService
+from src.services.feedback_service import FeedbackService
 from src.services.google_calendar_service import GoogleCalendarService
 from src.services.google_oauth_service import GoogleOAuthService
 from src.services.google_token_service import GoogleTokenService
@@ -225,6 +226,13 @@ def get_event_service(
         calendar=calendar,
         token_service=token_service,
     )
+
+
+def get_feedback_service(
+    ctx: DeviceContext = Depends(get_device_context),
+    db: Session = Depends(get_db),
+) -> FeedbackService:
+    return FeedbackService(db, ctx.family_id)
 
 
 # ---------------------------------------------------------------------------

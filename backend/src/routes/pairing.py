@@ -8,15 +8,17 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from src.core.dependencies import get_google_oauth_service, get_redis
+from src.core.rate_limit import get_limiter
 from src.schemas.oauth import PairingStartRequest, PairingStartResponse
 from src.services.google_oauth_service import GoogleOAuthService
 
 router = APIRouter(prefix="/pairing", tags=["pairing"])
+_limiter = get_limiter()
 
 PAIRING_KEY_PREFIX = "pairing:"
 PAIRING_VERIFIER_KEY_PREFIX = "pairing:verifier:"
@@ -24,7 +26,9 @@ PAIRING_TTL_SECONDS = 600  # 10 min
 
 
 @router.post("/start", response_model=PairingStartResponse)
+@_limiter.limit("10/minute")
 async def start_pairing(
+    request: Request,  # required by slowapi to read the client IP
     body: PairingStartRequest | None = None,
     redis: Redis = Depends(get_redis),
     oauth: GoogleOAuthService = Depends(get_google_oauth_service),

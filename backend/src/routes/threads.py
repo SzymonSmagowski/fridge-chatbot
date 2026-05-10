@@ -1,3 +1,7 @@
+import asyncio
+import base64
+import binascii
+import json
 from datetime import datetime
 from typing import List
 from uuid import UUID
@@ -18,6 +22,7 @@ from src.services.redis_service import get_redis_client
 from src.core.dependencies import get_settings
 from src.schemas.threads import (
     MessageFeedback,
+    MessagesPageResponse,
     ThreadCreate,
     ThreadMessagesResponse,
     ThreadResponse,
@@ -28,6 +33,43 @@ from src.services.logger import get_logger
 router = APIRouter(tags=["threads"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/pairing/start")
 logger = get_logger("threads_route")
+
+# How long the chat WS will wait for the auth+content first frame before
+# closing with code 4001. H1 — without this, an attacker can `accept()` and
+# hold the socket open forever.
+WS_FIRST_FRAME_TIMEOUT_SECONDS = 5.0
+
+# Per-IP rate limit on the chat WS connect path. slowapi's @limiter.limit
+# decorator is unreliable on WebSocket endpoints in some FastAPI versions, so
+# we implement a manual Redis INCR + TTL gate at the top of the handler.
+WS_RATE_LIMIT_MAX = 10
+WS_RATE_LIMIT_WINDOW_SECONDS = 60
+WS_RATE_LIMIT_CLOSE_CODE = 4429
+
+
+def _encode_cursor(created_at: datetime, message_id: UUID) -> str:
+    """Opaque cursor over (created_at, message_id) for stable pagination.
+
+    Both fields are needed: created_at gives chronological order; message_id
+    breaks ties when two rows share a timestamp (microsecond collisions
+    happen in fixtures and under heavy ingest).
+    """
+    raw = json.dumps(
+        {"created_at": created_at.isoformat(), "id": str(message_id)},
+        separators=(",", ":"),
+    )
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Inverse of _encode_cursor. Raises HTTPException(400) on malformed input."""
+    try:
+        pad = "=" * (-len(cursor) % 4)
+        raw = base64.urlsafe_b64decode((cursor + pad).encode()).decode()
+        data = json.loads(raw)
+        return datetime.fromisoformat(data["created_at"]), UUID(data["id"])
+    except (ValueError, KeyError, TypeError, binascii.Error, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid cursor") from exc
 
 
 def _thread_to_response(thread) -> dict:
@@ -67,6 +109,44 @@ async def create_thread(
     return _thread_to_response(thread)
 
 
+DEFAULT_PAGE_LIMIT = 30
+MAX_PAGE_LIMIT = 100
+
+
+def _format_messages_page(items, has_more: bool) -> dict:
+    """Shared envelope for {messages, has_more, next_cursor} pagination.
+
+    `next_cursor` points at the OLDEST message in this page (the last array
+    element since we serve newest-first). FE re-uses it as `before` for the
+    next page. Null when has_more is False.
+    """
+    next_cursor = (
+        _encode_cursor(items[-1].created_at, items[-1].message_id)
+        if items and has_more
+        else None
+    )
+    return {
+        "messages": [
+            {
+                "id": str(m.message_id),
+                "role": m.role,
+                "content": m.content,
+                "type": m.type,
+                "created_at": m.created_at.isoformat(),
+                "score": m.score,
+                "comment": m.comment,
+            }
+            for m in items
+        ],
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+    }
+
+
+# TODO(threads-family-scoping): The /threads/* surface still uses the legacy
+# `get_current_user` (shadow-user) auth path. Migrating to `get_device_context`
+# requires adding family_id to threads + a backfill — explicitly out of scope
+# for the pagination + feedback build (Architect's design A.4).
 @router.get("/threads/{thread_id}", response_model=ThreadMessagesResponse)
 async def get_thread(
     thread_id: int,
@@ -82,8 +162,46 @@ async def get_thread(
     if thread.user_id != user.id:
         raise HTTPException(status_code=403, detail="Not authorized to access this thread")
 
-    messages = await db_ops.get_formatted_thread_messages(thread.thread_id)
-    return {**_thread_to_response(thread), "messages": messages}
+    items, has_more = await db_ops.list_thread_messages_page(
+        thread.thread_id, before=None, limit=DEFAULT_PAGE_LIMIT
+    )
+    page = _format_messages_page(items, has_more)
+    return {**_thread_to_response(thread), **page}
+
+
+@router.get(
+    "/threads/{thread_id}/messages",
+    response_model=MessagesPageResponse,
+)
+async def list_thread_messages(
+    thread_id: int,
+    before: str | None = None,
+    limit: int = DEFAULT_PAGE_LIMIT,
+    token: str = Depends(oauth2_scheme),
+    auth_service=Depends(get_auth_service),
+    db: Session = Depends(get_db),
+    db_ops=Depends(get_db_operations_service),
+):
+    if limit < 1 or limit > MAX_PAGE_LIMIT:
+        raise HTTPException(
+            status_code=422,
+            detail=f"limit must be between 1 and {MAX_PAGE_LIMIT}",
+        )
+
+    user = await auth_service.get_current_user(token, db)
+    thread = await db_ops.get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if thread.user_id != user.id:
+        raise HTTPException(
+            status_code=403, detail="Not authorized to access this thread"
+        )
+
+    cursor = _decode_cursor(before) if before else None
+    items, has_more = await db_ops.list_thread_messages_page(
+        thread.thread_id, before=cursor, limit=limit
+    )
+    return _format_messages_page(items, has_more)
 
 
 @router.patch("/threads/{thread_id}", response_model=ThreadResponse)
@@ -160,6 +278,32 @@ async def message_feedback(
     return {"message_id": str(updated.message_id), "feedback": feedback, "success": True}
 
 
+async def _check_ws_rate_limit(websocket: WebSocket) -> bool:
+    """Manual Redis INCR/TTL rate limit for the chat WS connect path (H2).
+
+    slowapi's @limiter.limit decorator is unreliable on WebSocket endpoints
+    in current FastAPI/slowapi versions, so we gate manually using the same
+    Redis storage the limiter would have used. Returns True on allow, False
+    on deny (in which case the caller closes the WS with code 4429).
+
+    On Redis error we fail open — a working chat is more important than a
+    rate-limit guarantee, and the limit is a defense-in-depth signal, not a
+    primary auth gate.
+    """
+    settings = get_settings()
+    redis = get_redis_client(settings)
+    client_host = websocket.client.host if websocket.client else "unknown"
+    bucket_key = f"ratelimit:ws:chat:{client_host}"
+    try:
+        count = await redis.incr(bucket_key)
+        if count == 1:
+            await redis.expire(bucket_key, WS_RATE_LIMIT_WINDOW_SECONDS)
+        return count <= WS_RATE_LIMIT_MAX
+    except Exception as exc:  # noqa: BLE001 — fail open
+        logger.warning("ws rate-limit check failed; allowing: %s", exc)
+        return True
+
+
 @router.websocket("/ws/threads/{thread_id}")
 async def chat_websocket(
     websocket: WebSocket,
@@ -180,9 +324,22 @@ async def chat_websocket(
         except Exception:
             ws_connected = False
 
+    if not await _check_ws_rate_limit(websocket):
+        await websocket.close(
+            code=WS_RATE_LIMIT_CLOSE_CODE, reason="rate_limited"
+        )
+        return
+
     await websocket.accept()
     try:
-        payload = await websocket.receive_json()
+        try:
+            payload = await asyncio.wait_for(
+                websocket.receive_json(),
+                timeout=WS_FIRST_FRAME_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            await websocket.close(code=4001, reason="auth handshake timeout")
+            return
         content = payload.get("content")
         token = payload.get("token")
 

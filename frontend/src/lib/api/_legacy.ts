@@ -31,11 +31,35 @@ export interface MessageResponse {
   comment: string | null;
 }
 
-export interface ThreadMessagesResponse extends ThreadResponse {
+/**
+ * Cursor-paginated page of messages for a thread. Wire order is **newest-first**
+ * (DESC by created_at, then DESC by message_id for ties). `next_cursor` encodes
+ * the oldest message in the returned page; pass it as `before` on the next call
+ * to fetch the page immediately older than this one. `null` when `has_more === false`.
+ *
+ * This is the shape returned by:
+ *   - `GET /threads/{id}/messages?before=…&limit=…` (older history)
+ *   - the `messages_page` envelope embedded in `GET /threads/{id}` (initial open)
+ */
+export interface MessagesPageResponse {
   messages: MessageResponse[];
+  has_more: boolean;
+  next_cursor: string | null;
 }
 
-export interface FeedbackResponse {
+/**
+ * Initial-open envelope for a thread. The thread metadata (id, title, timestamps)
+ * lives at the top level alongside `messages`, `has_more`, `next_cursor` — the
+ * latter three forming a `MessagesPageResponse`-shaped initial page (latest 30
+ * messages by default).
+ */
+export interface ThreadMessagesResponse extends ThreadResponse, MessagesPageResponse {}
+
+/**
+ * Per-message thumbs up/down feedback (legacy, unrelated to the user-feedback
+ * channel). Writes `messages.score` / `messages.comment` on a single chat reply.
+ */
+export interface MessageThumbsFeedbackResponse {
   message_id: string;
   feedback: string;
   success: boolean;
@@ -99,6 +123,27 @@ export const apiClient = {
 
   getThread: (id: number) => api<ThreadMessagesResponse>(`/threads/${id}`),
 
+  /**
+   * Cursor-paginated older messages for a thread. Returns up to `limit` messages
+   * strictly older than `before` (the cursor returned by a prior call or by the
+   * initial `getThread` envelope). Wire order is newest-first; the FE reverses
+   * to chronological before prepending into `useExternalStoreRuntime`.
+   *
+   * Server clamps `limit` to [1, 100] (default 30 if omitted).
+   */
+  getThreadMessagesPage: (
+    id: number,
+    opts: { before?: string; limit?: number } = {},
+  ) => {
+    const u = new URLSearchParams();
+    if (opts.before) u.set("before", opts.before);
+    if (opts.limit != null) u.set("limit", String(opts.limit));
+    const q = u.toString();
+    return api<MessagesPageResponse>(
+      `/threads/${id}/messages${q ? `?${q}` : ""}`,
+    );
+  },
+
   renameThread: (id: number, title: string) =>
     api<ThreadResponse>(`/threads/${id}`, {
       method: "PATCH",
@@ -115,10 +160,13 @@ export const apiClient = {
     feedback: "like" | "dislike",
     comment?: string,
   ) =>
-    api<FeedbackResponse>(`/threads/messages/${messageId}/feedback`, {
-      method: "POST",
-      body: JSON.stringify({ feedback, comment }),
-    }),
+    api<MessageThumbsFeedbackResponse>(
+      `/threads/messages/${messageId}/feedback`,
+      {
+        method: "POST",
+        body: JSON.stringify({ feedback, comment }),
+      },
+    ),
 };
 
 export function wsUrl(threadId: number): string {

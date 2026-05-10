@@ -64,6 +64,7 @@ class ParentRouter:
                 family_id=family_id,
                 session_factory=self.session_factory,
                 voice_locale=voice_locale,
+                thread_uuid=thread_uuid_obj,
             )
         else:
             assistant = self.default_chat_graph

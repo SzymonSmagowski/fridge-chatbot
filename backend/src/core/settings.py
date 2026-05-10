@@ -1,7 +1,15 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Deployment environment. 'dev' is the default so a fresh clone boots with
+    # contributor-friendly defaults. In 'prod' the startup guards in
+    # `core/startup_guards.py` refuse to boot if SECRET_KEY / FERNET_KEY are
+    # still the published defaults or ALLOWED_ORIGINS contains localhost.
+    ENVIRONMENT: Literal["dev", "prod"] = "dev"
+
     # LLM
     OPENAI_API_KEY: str | None = None
     DEFAULT_MODEL: str = "gpt-5.4-nano"
@@ -29,7 +37,7 @@ class Settings(BaseSettings):
     FERNET_KEY: str = "v3wPLJTw45A9mE_b6mIwS5zmpxwPF-43bp9xL9qsQT4="
 
     # JWT
-    SECRET_KEY: str = "changeme"
+    SECRET_KEY: str = "changeme-use-a-long-random-string"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60480
     DEVICE_TOKEN_EXPIRE_DAYS: int = 365

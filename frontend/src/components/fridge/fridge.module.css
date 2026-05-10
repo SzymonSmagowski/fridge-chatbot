@@ -2576,3 +2576,128 @@
   }
   .voiceOverlay { animation: none !important; }
 }
+
+/* ----- Chat scroll-paginator (lazy-load older messages) ----- */
+.chatScrollPaginatorRoot {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.chatHistoryHint {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  color: var(--muted-fg);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  animation: chatHistoryHintFade 180ms ease-out;
+}
+@keyframes chatHistoryHintFade {
+  from { opacity: 0; transform: translate(-50%, -4px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.chatHistorySpinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--primary);
+  animation: chatHistorySpin 700ms linear infinite;
+}
+@keyframes chatHistorySpin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chatHistorySpinner { animation: none !important; }
+  .chatHistoryHint { animation: none !important; }
+}
+
+/* ----- Feedback modal ----- */
+.feedbackDialog {
+  background: var(--card);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-lg);
+  max-width: 520px;
+  width: calc(100% - 32px);
+  padding: 24px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.feedbackDialog h3 {
+  font-family: var(--font-varela-round), sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+}
+.feedbackDialog p {
+  color: var(--muted-fg);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.feedbackCategoryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.feedbackCategoryOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--fridge-radius);
+  border: 1.5px solid var(--border-color);
+  background: var(--surface-raised);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+}
+.feedbackCategoryOption:hover {
+  border-color: var(--primary);
+}
+.feedbackCategoryOption[data-checked="true"] {
+  border-color: var(--primary);
+  background: rgba(120, 105, 80, 0.08);
+}
+.feedbackCategoryOption input {
+  accent-color: var(--primary);
+}
+.feedbackTextarea {
+  min-height: 120px;
+  width: 100%;
+  resize: vertical;
+  padding: 10px 12px;
+  border-radius: var(--fridge-radius);
+  border: 1.5px solid var(--border-color);
+  background: var(--surface-raised);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--fg);
+  outline: none;
+  transition: border-color 120ms;
+}
+.feedbackTextarea:focus {
+  border-color: var(--primary);
+}
+.feedbackCharCount {
+  font-size: 12px;
+  color: var(--muted-fg);
+  text-align: right;
+}
+.feedbackCharCount[data-state="warn"] { color: #C77B14; }
+.feedbackCharCount[data-state="error"] { color: var(--destructive); }

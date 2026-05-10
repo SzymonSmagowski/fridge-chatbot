@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from redis.asyncio import Redis
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.core.dependencies import (
@@ -15,6 +16,7 @@ from src.core.dependencies import (
     get_session_factory_dep,
     get_settings,
 )
+from src.core.rate_limit import get_limiter
 from src.core.settings import Settings
 from src.models import (
     CalendarSyncState,
@@ -28,6 +30,37 @@ from src.services.google_calendar_service import GoogleCalendarService
 from src.workers.calendar_sync_worker import _pull_member
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
+_limiter = get_limiter()
+
+
+def _calendar_pull_rate_key(request: Request) -> str:
+    """Per-device rate-limit key for /calendar/sync/pull.
+
+    Reads the device JWT subject from the Authorization header without
+    invoking the full auth dependency (slowapi runs before deps). Falls back
+    to the remote IP if the header is missing or malformed — those paths
+    will be rejected by the auth dep moments later anyway.
+    """
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1]
+        # Token shape: header.payload.signature — payload contains 'sub'.
+        try:
+            import base64
+            import json
+
+            parts = token.split(".")
+            if len(parts) >= 2:
+                pad = "=" * (-len(parts[1]) % 4)
+                claims = json.loads(
+                    base64.urlsafe_b64decode((parts[1] + pad).encode())
+                )
+                sub = claims.get("sub")
+                if sub:
+                    return f"device:{sub}"
+        except Exception:  # noqa: BLE001 — fall back to IP on any parse error
+            pass
+    return get_remote_address(request)
 
 
 @router.get("/sync-state", response_model=list[SyncStateResponse])
@@ -62,7 +95,9 @@ def list_sync_state(
 
 
 @router.post("/sync/pull")
+@_limiter.limit("5/minute", key_func=_calendar_pull_rate_key)
 async def force_pull(
+    request: Request,  # required by slowapi to introspect headers
     member_id: UUID,
     ctx: DeviceContext = Depends(get_device_context),
     db: Session = Depends(get_db),

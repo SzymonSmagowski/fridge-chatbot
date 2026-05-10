@@ -135,6 +135,13 @@ async def _drain_client(websocket: WebSocket) -> None:
     The subscriber protocol is one-way (server → client). Anything the client
     sends is ignored, but we must keep draining so `WebSocketDisconnect` is
     raised on close.
+
+    H1 note — the chat WS adds a 5s timeout on the first receive because it
+    requires the client to send a content+token frame to begin. The family
+    events WS doesn't: auth is already done at handshake (?token=), and
+    healthy clients are passive subscribers. The 25s heartbeat (see
+    HEARTBEAT_INTERVAL_SECONDS) is the liveness mechanism here, not a
+    receive timeout — adding one would close every well-behaved subscriber.
     """
     while True:
         await websocket.receive_text()

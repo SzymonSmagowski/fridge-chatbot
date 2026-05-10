@@ -22,7 +22,7 @@ postmortem.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from langchain_core.tools import tool
@@ -32,12 +32,14 @@ from src.core.cache import family_key, invalidate
 from src.core.context import current_actor
 from src.core.settings import Settings
 from src.models import Car, Member, MemberStatus
+from src.models.feedback import FeedbackCategory
 from src.schemas.cars import CarCreateRequest
 from src.schemas.notes import NoteCreateRequest
 from src.services.car_service import CarService
 from src.services.chat_streaming import ChatStreamer
 from src.services.event_service import EventListFilters, EventService
 from src.services.event_target_resolver import EventTargetResolver
+from src.services.feedback_service import FeedbackService
 from src.services.label_service import LabelService
 from src.services.member_service import MemberService
 from src.services.note_service import NoteListFilters, NoteService
@@ -86,9 +88,15 @@ def build_tools(
     family_id: UUID,
     session_factory: sessionmaker,
     settings: Settings,
+    thread_uuid: UUID | None = None,
     end_session_signal: Any | None = None,
 ) -> list[Any]:
     """Return a list of @tool functions, all closed over `family_id`.
+
+    `thread_uuid` is the current chat thread's UUID; captured via closure for
+    `submit_feedback` so the LLM cannot pass an attacker-controlled thread id.
+    The chat path passes the active thread; the voice path passes `None`
+    (voice sessions don't have a chat thread).
 
     `end_session_signal` is an optional `asyncio.Event` (or anything with a
     `.set()` method). When provided, the `end_session` tool is registered;
@@ -386,6 +394,43 @@ def build_tools(
                 "color": car.color_label,
             }
 
+    @tool
+    async def submit_feedback(
+        category: Literal["bug", "improvement", "question", "other"],
+        message: str,
+    ) -> dict:
+        """Log a piece of user feedback (a bug report, feature idea, or
+        question) for the development team to review.
+
+        Use this ONLY after the user has explicitly confirmed they want
+        feedback submitted on their behalf. See the system prompt's
+        Feedback channel section for the confirmation flow.
+
+        Args:
+            category: 'bug' for things that don't work; 'improvement' for
+                feature ideas; 'question' for "I don't understand X";
+                'other' as a fallback.
+            message: The user's words (or a faithful paraphrase) describing
+                what they want logged. Quote them when possible.
+
+        The current chat thread is attached automatically by the graph —
+        the LLM does not (and cannot) pass it.
+        """
+        current_actor.set("chat-tool")
+        with session_factory() as db:
+            service = FeedbackService(db, family_id)
+            row = await service.submit_from_assistant(
+                category=FeedbackCategory(category),
+                message=message,
+                thread_id=thread_uuid,
+            )
+            return {
+                "ok": True,
+                "what": "feedback",
+                "category": category,
+                "id_prefix": str(row.id)[:8],
+            }
+
     tools_list: list[Any] = [
         list_notes,
         add_note,
@@ -397,6 +442,7 @@ def build_tools(
         list_members,
         list_cars,
         add_car,
+        submit_feedback,
     ]
 
     # Voice-only: gives the LLM an explicit way to signal "the user said

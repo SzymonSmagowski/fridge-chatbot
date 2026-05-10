@@ -11,6 +11,12 @@ from src.models.event import (
     ExternalEventCacheRow,
 )
 from src.models.family import Device, Family, FamilyPreferences
+from src.models.feedback import (
+    Feedback,
+    FeedbackAuthorKind,
+    FeedbackCategory,
+    FeedbackStatus,
+)
 from src.models.label import Label, NoteLabel
 from src.models.member import (
     CalendarSyncState,
@@ -44,4 +50,8 @@ __all__ = [
     "EventTargetSyncStatus",
     "EventCar",
     "ExternalEventCacheRow",
+    "Feedback",
+    "FeedbackAuthorKind",
+    "FeedbackCategory",
+    "FeedbackStatus",
 ]

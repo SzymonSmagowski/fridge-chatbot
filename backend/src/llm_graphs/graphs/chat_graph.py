@@ -58,6 +58,7 @@ class ChatGraph:
         family_id: UUID | None = None,
         session_factory: sessionmaker | None = None,
         voice_locale: Locale | str = "auto",
+        thread_uuid: UUID | None = None,
     ) -> None:
         self.settings = settings
         self.family_id = family_id
@@ -68,6 +69,7 @@ class ChatGraph:
         # clearly-the-other-language input. Stored as a plain string so we
         # don't have to cast at every read site.
         self.voice_locale: str = voice_locale
+        self.thread_uuid = thread_uuid
         base_llm = LLMFactory.create_llm(settings, temperature=settings.DEFAULT_TEMPERATURE)
         self.tools: list[Any] = []
         if family_id is not None and session_factory is not None:
@@ -77,6 +79,7 @@ class ChatGraph:
                 family_id=family_id,
                 session_factory=session_factory,
                 settings=settings,
+                thread_uuid=thread_uuid,
             )
             self.llm = base_llm.bind_tools(self.tools)
         else:

@@ -9,13 +9,25 @@
  */
 export { apiClient, ApiError, BACKEND_URL, wsUrl } from "./_legacy";
 export type {
-  FeedbackResponse,
   MessageResponse,
+  MessagesPageResponse,
+  MessageThumbsFeedbackResponse,
   ThreadMessagesResponse,
   ThreadResponse,
   UserPublic,
   UserResponse,
 } from "./_legacy";
+
+export { feedbackApi } from "./feedback";
+export type {
+  FeedbackAuthorKind,
+  FeedbackCategory,
+  FeedbackCreateRequest,
+  FeedbackListFilters,
+  FeedbackListResponse,
+  FeedbackResponse,
+  FeedbackStatus,
+} from "./feedback";
 
 export { familyApi } from "./family";
 export type {
