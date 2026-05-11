@@ -77,7 +77,7 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
 
 gcloud compute scp --tunnel-through-iap \
     --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
-    docker-compose.prod.yml Caddyfile fetch-secrets.sh \
+    docker-compose.prod.yml Caddyfile fetch-secrets.sh provision-langfuse-org.sh \
     "$VM_NAME:/srv/apps/fridge-chatbot/"
 
 # --- 4. Fetch secrets + 5. compose up on VM ----------------------------------
@@ -91,13 +91,16 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
     --command="
         set -e
         cd /srv/apps/fridge-chatbot
-        chmod +x fetch-secrets.sh
+        chmod +x fetch-secrets.sh provision-langfuse-org.sh
         sudo gcloud auth configure-docker '${REGION}-docker.pkg.dev' --quiet
         FRIDGE_BACKEND_IMAGE='$BACKEND_IMG' \
         FRIDGE_FRONTEND_IMAGE='$FRONTEND_IMG' \
         sudo -E ./fetch-secrets.sh
         sudo docker compose -f docker-compose.prod.yml --env-file .env pull
         sudo docker compose -f docker-compose.prod.yml --env-file .env up -d
+        # One-shot, idempotent: rename the legacy 'prodorg' Langfuse org to
+        # the per-app 'fridge-chatbot' org. No-op on subsequent re-deploys.
+        sudo ./provision-langfuse-org.sh
     "
 
 # --- 6. Report public URL ----------------------------------------------------

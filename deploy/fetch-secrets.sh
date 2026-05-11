@@ -62,12 +62,13 @@ FRIDGE_LF_SEC=$(get "$APP_PROJECT" fridge-chatbot-langfuse-secret-key)
 FRIDGE_OAUTH_ID=$(get "$APP_PROJECT" fridge-chatbot-oauth-client-id)
 FRIDGE_OAUTH_SECRET=$(get "$APP_PROJECT" fridge-chatbot-oauth-client-secret)
 
-# Public base URL — used for OAuth redirect URI, ALLOWED_ORIGINS, and the
-# Langfuse NEXTAUTH_URL. Prefer the canonical HTTPS domain (Caddy handles the
-# cert); fall back to http://<VM_IP> if no domain is configured.
-#
-# Override via env: PUBLIC_DOMAIN=fridge-chatbot.duckdns.org ./fetch-secrets.sh
+# Public base URLs.
+# - PUBLIC_DOMAIN     → the user-facing fridge-chatbot app domain.
+# - LANGFUSE_DOMAIN   → the operator-only Langfuse domain (fronted by Caddy).
+# Both get HTTPS automatically (Caddy → Let's Encrypt).
+# Override via env, e.g. LANGFUSE_DOMAIN=other.example.com ./fetch-secrets.sh
 : "${PUBLIC_DOMAIN:=fridge-chatbot.duckdns.org}"
+: "${LANGFUSE_DOMAIN:=smagowski-ai-lab-langfuse.duckdns.org}"
 VM_IP=$(curl -fsSL -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip")
 if [[ -n "$PUBLIC_DOMAIN" ]]; then
@@ -80,6 +81,10 @@ else
     PUBLIC_BASE_URL="http://${VM_IP}"
     LIVEKIT_PUBLIC_URL="ws://${VM_IP}:7880"
 fi
+# Langfuse's NextAuth signs cookies/callbacks against this URL — it MUST match
+# the URL the browser uses, or login redirects break with a 302 loop. Caddy
+# terminates TLS in front of langfuse-web:3000, so the public scheme is https.
+LANGFUSE_NEXTAUTH_URL_VALUE="https://${LANGFUSE_DOMAIN}"
 
 # Image refs — caller (deploy.sh) overrides via env. Defaults to :latest.
 : "${FRIDGE_BACKEND_IMAGE:=europe-west1-docker.pkg.dev/ai-lab-fridge-chatbot/fridge-chatbot/backend:latest}"
@@ -101,7 +106,7 @@ FRIDGE_FRONTEND_IMAGE=${FRIDGE_FRONTEND_IMAGE}
 PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
 LIVEKIT_PUBLIC_URL=${LIVEKIT_PUBLIC_URL}
 VM_EXTERNAL_IP=${VM_IP}
-LANGFUSE_NEXTAUTH_URL=http://${VM_IP}:3001
+LANGFUSE_NEXTAUTH_URL=${LANGFUSE_NEXTAUTH_URL_VALUE}
 
 # --- Shared infra ---
 POSTGRES_ADMIN_PASSWORD=${SHARED_PG}

@@ -6,6 +6,7 @@ A shared-appliance kiosk chatbot for household management. Members are assignees
 
 - `backend/` — Python/FastAPI/LangGraph service. See `backend/CLAUDE.md`.
 - `frontend/` — Next.js 16 (App Router, Turbopack) + React 19 + TypeScript + Tailwind CSS 4 + shadcn + `@assistant-ui/react`. Uses assistant-ui components only; runtime is custom (REST + WebSocket directly to our FastAPI — no vendor SDK). See `frontend/CLAUDE.md`.
+- `deploy/` — Production deployment artifacts: `docker-compose.prod.yml`, `Caddyfile`, `deploy.sh`, `provision-langfuse-org.sh`, `fetch-secrets.sh`. Source of truth for credentials, connection profiles, and Langfuse org provisioning. See `deploy/README.md`.
 
 ## Dev
 

@@ -1,15 +1,15 @@
 # Apartment-building reverse proxy. Caddy auto-provisions a Let's Encrypt cert
-# the first time the domain is hit — DNS must already point at this VM AND
+# the first time each domain is hit — DNS must already point at this VM AND
 # ports 80/443 must be reachable from the public internet (they are).
 #
-# Routing strategy: single host, path-based. The backend serves a known set of
-# prefixes; everything else goes to the Next.js frontend.
+# Hosts served from this Caddy:
+#   - fridge-chatbot.duckdns.org              → public app (frontend + backend + livekit)
+#   - smagowski-ai-lab-langfuse.duckdns.org   → operator-only Langfuse UI
+#                                                (self-signup disabled, single admin user)
 #
-# WebSockets: Caddy's reverse_proxy auto-handles the HTTP/1.1 upgrade for
-# /ws/* paths — no special directive needed.
-#
-# Langfuse UI is intentionally NOT exposed externally. Operator access via:
-#   gcloud compute ssh infra-vm --tunnel-through-iap -- -L 3001:langfuse-web:3000
+# Operator-access policy: web-first via the dedicated duckdns hostname above.
+# Do NOT propose `gcloud ... -L 3001:langfuse-web:3000` SSH-tunnel access as
+# the default flow — that policy was retired 2026-05-11.
 
 fridge-chatbot.duckdns.org {
     # LiveKit WebSocket signaling — reverse-proxied so clients talk over the
@@ -35,10 +35,24 @@ fridge-chatbot.duckdns.org {
     }
 }
 
+# Langfuse operator UI. Caddy auto-issues a Let's Encrypt cert on first hit.
+# All paths (including the websocket-based /api/auth flow) go to one upstream.
+# Self-signup is disabled inside Langfuse (AUTH_DISABLE_SIGNUP=true in compose);
+# only the admin user seeded by LANGFUSE_INIT_USER_* can sign in.
+smagowski-ai-lab-langfuse.duckdns.org {
+    reverse_proxy langfuse-web:3000
+
+    encode zstd gzip
+    log {
+        output stdout
+        format console
+    }
+}
+
 # Plain-HTTP requests to the bare IP (no Host match) still get a friendly
-# redirect to the canonical HTTPS domain. Caddy's automatic HTTPS does this
-# for the matched host, but a request to http://<ip>/ wouldn't otherwise
-# match the block above.
+# redirect to the canonical HTTPS domain of the public app. Caddy's automatic
+# HTTPS does this for matched hosts, but a request to http://<ip>/ wouldn't
+# otherwise match any block above.
 :80 {
     redir https://fridge-chatbot.duckdns.org{uri} permanent
 }

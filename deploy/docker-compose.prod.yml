@@ -142,11 +142,30 @@ services:
     command: ["start"]
 
   # ----- Postgres + per-DB init ---------------------------------------------
+  # The host port 5432 is exposed for operator pgAdmin/DBeaver access. Reach-
+  # ability is gated by a GCP firewall rule that only allows tcp:5432 from
+  # `operator_whitelist_ips` in terraform/prod.auto.tfvars (currently the
+  # operator's residential /32). Without that firewall rule, this binding is
+  # effectively private — but DO NOT remove the firewall and rely on auth
+  # alone: docker-proxy binds to 0.0.0.0 the moment compose starts.
+  #
+  # TLS: deliberately NOT enabled. Trade-off considered:
+  #   + Postgres auth is 32-char Secret-Manager-sourced; brute force unrealistic.
+  #   + Traffic path is operator's residential ISP → GCP backbone, no shared L2.
+  #   + Self-signed cert mgmt (generate, mount, rotate, configure pgAdmin SSL
+  #     to verify-full or skip) doubles the friction for a single operator.
+  #   − In-flight queries cross the public internet in plaintext. A passive
+  #     observer on the operator's ISP could read DB rows.
+  # Decision: defer until either (a) more than one operator joins, or (b) the
+  # operator's threat model changes. Re-evaluate by switching POSTGRES image
+  # config to enable ssl + mounting certs from a Secret-Manager-fed init.
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     logging: *default-logging
     networks: [apartment]
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
@@ -195,11 +214,21 @@ services:
         echo "postgres-init: OK"
 
   # ----- Redis + per-app ACL ------------------------------------------------
+  # Host port 6379 exposed for operator redis-cli / RedisInsight. Same firewall
+  # contract as Postgres above — reachable only from `operator_whitelist_ips`.
+  #
+  # TLS: NOT enabled. Redis 7 supports `--tls-port` but requires CA + cert +
+  # key files + client-side stunnel/RedisInsight TLS config. For a single
+  # operator on a /32 with `--requirepass` (32-char Secret-Manager value) +
+  # per-app ACL users, the additional cert plumbing is not worth it today.
+  # Same revisit trigger as Postgres: multi-operator, or threat model change.
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     logging: *default-logging
     networks: [apartment]
+    ports:
+      - "6379:6379"
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     volumes:
       - ./data/redis:/data
@@ -342,10 +371,20 @@ services:
       LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
       LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
-      # Auto-provision the fridge-chatbot project on first boot using the
-      # keys we generated in seed-secrets.sh. Same pattern as devcontainer.
-      LANGFUSE_INIT_ORG_ID: prodorg
-      LANGFUSE_INIT_ORG_NAME: "Production"
+      # Operator policy: web-first access via smagowski-ai-lab-langfuse.duckdns.org.
+      # Lock the door — only the seeded admin user (and anyone they invite from
+      # inside the UI) can sign in. New visitors cannot self-register.
+      AUTH_DISABLE_SIGNUP: "true"
+      # Per-app org + project model: one Langfuse org per app slug, one project
+      # per app slug. On a fresh VM these LANGFUSE_INIT_* vars seed the org +
+      # project + admin user atomically. On the CURRENT VM, langfuse-web has
+      # already booted once with the old `prodorg` values, so changing them
+      # here is necessary but NOT sufficient — Langfuse's headless init only
+      # creates resources if they don't exist. The one-time migration of the
+      # existing org from `prodorg` → `fridge-chatbot` is done by
+      # provision-langfuse-org.sh (run once after this redeploy).
+      LANGFUSE_INIT_ORG_ID: fridge-chatbot
+      LANGFUSE_INIT_ORG_NAME: "Fridge Chatbot"
       LANGFUSE_INIT_PROJECT_ID: fridge-chatbot
       LANGFUSE_INIT_PROJECT_NAME: "Fridge Chatbot"
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${FRIDGE_LANGFUSE_PUBLIC_KEY}
