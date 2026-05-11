@@ -15,6 +15,11 @@ class PairingStartResponse(BaseModel):
     authorize_url: str
 
 
+class PairingStatusResponse(BaseModel):
+    status: str  # "pending" | "complete" | "expired"
+    token: str | None = None
+
+
 class AuthorizeUrlResponse(BaseModel):
     authorize_url: str
 

@@ -9,9 +9,18 @@ export interface PairingStartResponse {
   pairing_id: string;
 }
 
+export interface PairingStatusResponse {
+  status: "pending" | "complete" | "expired";
+  token: string | null;
+}
+
 /**
  * First-time device pairing — unauth'd. Returns Google consent URL + pairing id.
  * Per Architect §5.0, pairing's REST surface lives under `/api/`.
+ *
+ * `status` is polled by the kiosk while the QR code is on screen. Returns
+ * `complete` exactly once (the backend deletes the done-flag after read), so
+ * the kiosk must persist the JWT to localStorage immediately on receipt.
  */
 export const pairingApi = {
   start: (deviceLabel?: string) =>
@@ -20,6 +29,11 @@ export const pairingApi = {
       body: JSON.stringify(deviceLabel ? { device_label: deviceLabel } : {}),
       auth: false,
     }),
+  status: (pairingId: string) =>
+    http<PairingStatusResponse>(
+      `/api/pairing/status/${encodeURIComponent(pairingId)}`,
+      { auth: false },
+    ),
 };
 
 /**

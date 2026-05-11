@@ -43,7 +43,12 @@ from src.models import (
     NoteLabel,
     User,
 )
-from src.routes.pairing import PAIRING_KEY_PREFIX, PAIRING_VERIFIER_KEY_PREFIX
+from src.routes.pairing import (
+    PAIRING_DONE_KEY_PREFIX,
+    PAIRING_DONE_TTL_SECONDS,
+    PAIRING_KEY_PREFIX,
+    PAIRING_VERIFIER_KEY_PREFIX,
+)
 from src.schemas.oauth import AuthorizeUrlResponse
 from src.services.auth_service import AuthService
 from src.services.crypto_service import CryptoService
@@ -283,10 +288,30 @@ async def _handle_pair_callback(
     device_token = auth_service.create_device_token(
         device_id=device.id, family_id=family.id
     )
-    # v1 hardening trade-off (spec §11): the device token is delivered in the
-    # URL query string so the SPA's `/pair/complete` page can grab it without a
-    # backend session. Acceptable for a one-shot pairing redirect; the cookie
-    # path is gone — frontend persists to localStorage + cookie itself.
+
+    # Stash the JWT for the kiosk to poll. The QR-code pairing flow shows the
+    # consent URL on the kiosk → user completes Google sign-in on their phone
+    # → callback runs in the phone's browser (this code path) → kiosk never
+    # sees the redirect. The kiosk polls /api/pairing/status/<id> on a 2s loop
+    # and the polling endpoint hands it this JWT once. Best-effort: if Redis
+    # blips here we still 302 to /pair/complete?token=… so the legacy
+    # "Use this device" fallback (kiosk does OAuth itself) still works.
+    try:
+        await redis.set(
+            f"{PAIRING_DONE_KEY_PREFIX}{pairing_id}",
+            device_token,
+            ex=PAIRING_DONE_TTL_SECONDS,
+        )
+    except RedisError as exc:
+        logger.warning(
+            "pairing done-flag write failed for %s: %s", pairing_id, exc
+        )
+
+    # The query-string token remains for the fallback path (kiosk did OAuth
+    # itself, so the kiosk's browser is the one landing on /pair/complete).
+    # In the QR/phone path the phone lands here; the /pair/complete page
+    # branches on a localStorage marker to avoid persisting the kiosk's JWT
+    # into the phone's auth state.
     return RedirectResponse(
         url=f"{settings.FRONTEND_BASE_URL}/pair/complete?token={device_token}",
         status_code=status.HTTP_302_FOUND,
