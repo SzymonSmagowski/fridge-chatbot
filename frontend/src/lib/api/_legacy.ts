@@ -1,7 +1,28 @@
 import { getToken } from "@/lib/auth";
 
-export const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8001";
+// Empty string = same-origin (the prod default — Caddy reverse-proxies /api/*,
+// /ws/*, etc. from the frontend's origin to the backend container). Dev sets
+// NEXT_PUBLIC_BACKEND_URL=http://localhost:8001 via .env.local so the dev
+// frontend (3000) can reach the dev backend (8001) across origins.
+//
+// Browser PNA (Private Network Access) blocks public-origin pages from calling
+// loopback addresses over HTTP, so a hardcoded localhost fallback would break
+// production. Same-origin is the only correct default for a kiosk deployed
+// behind a reverse proxy.
+export const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
+
+/**
+ * Effective base URL for constructing absolute URLs (WebSocket).
+ * - If NEXT_PUBLIC_BACKEND_URL was set at build time: that.
+ * - Otherwise (prod default): the current page's origin (same-origin via Caddy).
+ * - SSR fallback (no window): localhost:8001 — only matters if SSR ever fires
+ *   API calls, which the kiosk SPA does not.
+ */
+export function effectiveBackendBase(): string {
+  if (BACKEND_URL) return BACKEND_URL;
+  if (typeof window !== "undefined") return window.location.origin;
+  return "http://localhost:8001";
+}
 
 export interface UserResponse {
   id: number;
@@ -170,7 +191,7 @@ export const apiClient = {
 };
 
 export function wsUrl(threadId: number): string {
-  const httpUrl = new URL(`/ws/threads/${threadId}`, BACKEND_URL);
+  const httpUrl = new URL(`/ws/threads/${threadId}`, effectiveBackendBase());
   httpUrl.protocol = httpUrl.protocol === "https:" ? "wss:" : "ws:";
   return httpUrl.toString();
 }

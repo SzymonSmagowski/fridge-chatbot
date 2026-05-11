@@ -78,8 +78,10 @@ services:
       LANGFUSE_PUBLIC_KEY: ${FRIDGE_LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${FRIDGE_LANGFUSE_SECRET_KEY}
       LANGFUSE_ENABLED: "true"
-      # LiveKit
+      # LiveKit — internal URL is for backend-side token minting; PUBLIC URL is
+      # what gets returned to the browser in /api/livekit/token responses.
       LIVEKIT_URL: ws://livekit-server:7880
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
 
@@ -90,6 +92,54 @@ services:
     networks: [apartment]
     environment:
       NEXT_PUBLIC_BACKEND_URL: ${PUBLIC_BASE_URL}
+
+  # LiveKit voice agent. Long-running Python process that joins LiveKit rooms
+  # as the assistant participant. Uses the same image + same env as the
+  # FastAPI backend (shared business logic via the `voice_worker` module).
+  # When a kiosk opens voice mode, the frontend joins a room, the worker
+  # auto-joins because its room-name pattern matches (`fridge-<family_id>`),
+  # and the audio handshake completes. Without this service, the kiosk's
+  # voice overlay shows "Voice service did not respond" after ~10s timeout.
+  voice-worker:
+    image: ${FRIDGE_BACKEND_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    depends_on:
+      postgres-init: { condition: service_completed_successfully }
+      redis-init:    { condition: service_completed_successfully }
+      livekit-server: { condition: service_started }
+    environment:
+      # DB
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: fridge_chatbot
+      POSTGRES_PASSWORD: ${FRIDGE_DB_PASSWORD}
+      POSTGRES_DB: fridge_chatbot
+      # Redis
+      REDIS_URL: redis://fridge-chatbot:${FRIDGE_REDIS_PASSWORD}@redis:6379
+      # OpenAI (LLM + STT + TTS)
+      OPENAI_API_KEY: ${FRIDGE_OPENAI_API_KEY}
+      # LiveKit (worker talks to LiveKit internally on the docker network)
+      LIVEKIT_URL: ws://livekit-server:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      # Encryption/JWT not needed by worker but harmless to inherit.
+      SECRET_KEY: ${FRIDGE_JWT_SECRET_KEY}
+      FERNET_KEY: ${FRIDGE_FERNET_KEY}
+      # Langfuse traces — worker's tool calls instrument under the same project.
+      LANGFUSE_HOST: http://langfuse-web:3000
+      LANGFUSE_PUBLIC_KEY: ${FRIDGE_LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${FRIDGE_LANGFUSE_SECRET_KEY}
+      LANGFUSE_ENABLED: "true"
+      ENVIRONMENT: prod
+    # Override entrypoint so we never enter FastAPI's lifespan (uvicorn is the
+    # backend image's default ENTRYPOINT). The worker doesn't serve HTTP — it
+    # runs livekit-agents' CLI loop. Poetry isn't in the runtime image (only
+    # used during build), so we exec python directly from the venv on PATH.
+    # `start` is livekit-agents' production mode; `dev` is hot-reload.
+    entrypoint: ["python", "-m", "src.voice_worker.worker"]
+    command: ["start"]
 
   # ----- Postgres + per-DB init ---------------------------------------------
   postgres:
@@ -119,6 +169,10 @@ services:
     environment:
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
       FRIDGE_DB_PASSWORD: ${FRIDGE_DB_PASSWORD}
+    # Why: psql's `-c` flag sends SQL verbatim WITHOUT variable substitution
+    # (per psql docs). `:'pw'` only expands when SQL is read from stdin/-f,
+    # not -c. Solution: pipe SQL via heredoc + psql's `:'name'` substitution.
+    # `$$` in the compose entrypoint escapes to a single `$` for the shell.
     entrypoint:
       - /bin/sh
       - -c
@@ -126,16 +180,15 @@ services:
         set -e
         psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='langfuse'" | grep -q 1 \
           || psql -h postgres -U postgres -c "CREATE DATABASE langfuse"
-        psql -h postgres -U postgres -v fridge_pw="$$FRIDGE_DB_PASSWORD" <<-'SQL'
-          DO $$
-          BEGIN
-              IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'fridge_chatbot') THEN
-                  EXECUTE format('CREATE ROLE fridge_chatbot LOGIN PASSWORD %L', :'fridge_pw');
-              ELSE
-                  EXECUTE format('ALTER ROLE fridge_chatbot WITH LOGIN PASSWORD %L', :'fridge_pw');
-              END IF;
-          END $$;
+        if psql -h postgres -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='fridge_chatbot'" | grep -q 1; then
+          psql -h postgres -U postgres -v pw="$$FRIDGE_DB_PASSWORD" <<'SQL'
+        ALTER ROLE fridge_chatbot WITH LOGIN PASSWORD :'pw';
         SQL
+        else
+          psql -h postgres -U postgres -v pw="$$FRIDGE_DB_PASSWORD" <<'SQL'
+        CREATE ROLE fridge_chatbot WITH LOGIN PASSWORD :'pw';
+        SQL
+        fi
         psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='fridge_chatbot'" | grep -q 1 \
           || psql -h postgres -U postgres -c "CREATE DATABASE fridge_chatbot OWNER fridge_chatbot"
         psql -h postgres -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE fridge_chatbot TO fridge_chatbot"
@@ -168,8 +221,16 @@ services:
       - -c
       - |
         set -e
+        # Note on ACL scope: we use ~* (all keys) + &* (all channels) rather
+        # than the narrower ~fridge-chatbot:* / &fridge-chatbot:* because
+        # slowapi (rate limiter) writes its keys under `LIMITS:LIMITER/...`
+        # without a configurable prefix, and the backend's other Redis usage
+        # (pub/sub channels, OAuth state in `oauth_state:...`) also doesn't
+        # namespace under the app slug. Until we wire end-to-end key
+        # prefixing into the backend code, the per-app ACL must be wide.
+        # Multi-app isolation will need to revisit this.
         redis-cli -h redis -a "${REDIS_PASSWORD}" --no-auth-warning ACL SETUSER fridge-chatbot \
-          on ">${FRIDGE_REDIS_PASSWORD}" "~fridge-chatbot:*" "&fridge-chatbot:*" "+@all"
+          on ">${FRIDGE_REDIS_PASSWORD}" "~*" "&*" "+@all"
         redis-cli -h redis -a "${REDIS_PASSWORD}" --no-auth-warning ACL SAVE
         echo "redis-init: OK"
 
@@ -179,6 +240,10 @@ services:
     restart: unless-stopped
     logging: *default-logging
     networks: [apartment]
+    # Uncapped on purpose — measuring actual usage. ClickHouse 24.8 defaults
+    # to ~half host RAM (so ~15 GB on our 32 GB VM). Watch via `docker stats`
+    # after a few minutes of Langfuse traffic; if usage stays under ~3-4 GB,
+    # add a generous mem_limit later (e.g. 4G) just as a safety net.
     environment:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: clickhouse
@@ -290,17 +355,34 @@ services:
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_ADMIN_PASSWORD}
 
   # ----- LiveKit (voice/WebRTC) ---------------------------------------------
+  # LIVEKIT_KEYS env var format is "<api-key>: <api-secret>" (literal space).
+  # Avoids the CLI-arg whitespace ambiguity that bit `--keys=K: S` in compose.
+  # LiveKit (voice/WebRTC). Two non-obvious settings:
+  #   - LIVEKIT_KEYS env var instead of `--keys` CLI arg: an API key generated
+  #     by urlsafe-base64 may start with `-`, which the CLI arg parser
+  #     interprets as a flag separator and the key never registers.
+  #   - --node-ip: LiveKit hands this IP to clients as the WebRTC ICE
+  #     candidate. Behind a cloud-VM NAT, auto-discovery returns the
+  #     internal IP (10.x.x.x) which clients can't reach. Must be the
+  #     VM's external IP (computed by fetch-secrets.sh).
   livekit-server:
     image: livekit/livekit-server:latest
     restart: unless-stopped
     logging: *default-logging
     networks: [apartment]
+    # --udp-port: single-port multiplexing. LiveKit v1.x demuxes thousands of
+    # concurrent WebRTC peers through one UDP server port via the (client_ip,
+    # client_port, server_ip, server_port) 4-tuple. No port range needed,
+    # minimal docker-proxy footprint (1 process instead of N).
     command:
-      - --bind=0.0.0.0
-      - --keys=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}
+      - "--bind=0.0.0.0"
+      - "--node-ip=${VM_EXTERNAL_IP}"
+      - "--udp-port=50000"
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
     ports:
       - "7881:7881/tcp"
-      - "50000-60000:50000-60000/udp"
+      - "50000:50000/udp"
 
 networks:
   apartment:

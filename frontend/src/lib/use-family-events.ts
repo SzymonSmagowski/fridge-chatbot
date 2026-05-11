@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { BACKEND_URL } from "@/lib/api";
+import { effectiveBackendBase } from "@/lib/api/_legacy";
 import { clearToken, getToken } from "@/lib/auth";
 
 /**
@@ -63,7 +63,7 @@ function readFamilyIdFromToken(token: string): string | null {
 }
 
 function buildWsUrl(familyId: string, token: string): string {
-  const url = new URL(`/ws/family/${familyId}/events`, BACKEND_URL);
+  const url = new URL(`/ws/family/${familyId}/events`, effectiveBackendBase());
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("token", token);
   return url.toString();

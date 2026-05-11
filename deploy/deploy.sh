@@ -25,7 +25,12 @@ readonly REGION="europe-west1"
 readonly REGISTRY="${REGION}-docker.pkg.dev/${APP_PROJECT}/fridge-chatbot"
 
 # Tag images with git SHA + :latest (so rollback is `docker tag <sha> :latest && pull`).
+# If the working tree has uncommitted changes the build wouldn't match the SHA,
+# so append `-dirty` to make that visible in `docker images`.
 TAG="$(git rev-parse --short=12 HEAD)"
+if ! git diff --quiet HEAD -- "$APP_DIR" "$DEPLOY_DIR"; then
+    TAG="${TAG}-dirty"
+fi
 BACKEND_IMG="${REGISTRY}/backend:${TAG}"
 FRONTEND_IMG="${REGISTRY}/frontend:${TAG}"
 BACKEND_LATEST="${REGISTRY}/backend:latest"
@@ -33,32 +38,42 @@ FRONTEND_LATEST="${REGISTRY}/frontend:latest"
 
 echo "==> Tag: $TAG"
 
-# --- 1. Authenticate Docker to Artifact Registry (once per session) ----------
-echo "==> docker login (Artifact Registry)"
-gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet >/dev/null
+# --- 1. Build + push images via Cloud Build ----------------------------------
+# Devcontainers don't have docker-in-docker, so we use Cloud Build instead:
+# upload the source, GCP builds the image and pushes it to Artifact Registry.
+# Free tier: 120 build-min/day. Default Cloud Build SA needs writer access
+# on the per-app repo (granted via Terraform module "container_registry").
+#
+# `--tag <sha>` is the only image tag that Cloud Build supports natively;
+# we alias `:latest` afterward via `gcloud artifacts docker tags add`
+# (no rebuild — just a tag update, instant + free).
 
-# --- 2. Build + push images --------------------------------------------------
-echo "==> Build backend image"
-docker build \
-    -t "$BACKEND_IMG" -t "$BACKEND_LATEST" \
-    -f "$APP_DIR/backend/Dockerfile" "$APP_DIR/backend"
+echo "==> Cloud Build: backend ($BACKEND_IMG)"
+gcloud builds submit \
+    --tag "$BACKEND_IMG" \
+    --project="$APP_PROJECT" \
+    --timeout=15m \
+    "$APP_DIR/backend"
 
-echo "==> Build frontend image"
-docker build \
-    -t "$FRONTEND_IMG" -t "$FRONTEND_LATEST" \
-    -f "$APP_DIR/frontend/Dockerfile" "$APP_DIR/frontend"
+echo "==> Cloud Build: frontend ($FRONTEND_IMG)"
+gcloud builds submit \
+    --tag "$FRONTEND_IMG" \
+    --project="$APP_PROJECT" \
+    --timeout=20m \
+    "$APP_DIR/frontend"
 
-echo "==> Push images"
-docker push "$BACKEND_IMG"
-docker push "$BACKEND_LATEST"
-docker push "$FRONTEND_IMG"
-docker push "$FRONTEND_LATEST"
+echo "==> Tag :latest on both images"
+gcloud artifacts docker tags add "$BACKEND_IMG"  "$BACKEND_LATEST"  --quiet
+gcloud artifacts docker tags add "$FRONTEND_IMG" "$FRONTEND_LATEST" --quiet
 
 # --- 3. Copy deploy artifacts to VM ------------------------------------------
+# IAP SSH uses an OS-Login-generated user (e.g. smagowski_szymon_gmail_com),
+# not `ubuntu`. Chown to `$(id -un)` so the upcoming scp can write directly,
+# then leave the dir owned by that user for subsequent re-deploys.
 echo "==> Copy compose/Caddyfile/fetch-secrets.sh to VM"
 gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
     --tunnel-through-iap --quiet \
-    --command='sudo mkdir -p /srv/apps/fridge-chatbot && sudo chown ubuntu:ubuntu /srv/apps/fridge-chatbot'
+    --command='sudo mkdir -p /srv/apps/fridge-chatbot && sudo chown "$(id -un)":"$(id -gn)" /srv/apps/fridge-chatbot'
 
 gcloud compute scp --tunnel-through-iap \
     --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
@@ -66,6 +81,10 @@ gcloud compute scp --tunnel-through-iap \
     "$VM_NAME:/srv/apps/fridge-chatbot/"
 
 # --- 4. Fetch secrets + 5. compose up on VM ----------------------------------
+# `gcloud auth configure-docker` writes a credHelpers entry pointing at the
+# `docker-credential-gcloud` binary (ships with the SDK). The helper asks the
+# metadata server for an OAuth token at pull time — no JSON keys, no
+# `docker login`. Idempotent: re-running just rewrites the same JSON.
 echo "==> Run fetch-secrets.sh + docker compose up -d on VM"
 gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
     --tunnel-through-iap --quiet \
@@ -73,6 +92,7 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
         set -e
         cd /srv/apps/fridge-chatbot
         chmod +x fetch-secrets.sh
+        sudo gcloud auth configure-docker '${REGION}-docker.pkg.dev' --quiet
         FRIDGE_BACKEND_IMAGE='$BACKEND_IMG' \
         FRIDGE_FRONTEND_IMAGE='$FRONTEND_IMG' \
         sudo -E ./fetch-secrets.sh

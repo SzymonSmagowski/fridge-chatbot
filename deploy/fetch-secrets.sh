@@ -18,10 +18,13 @@ readonly APP_PROJECT="ai-lab-fridge-chatbot"
 readonly ENV_FILE="/srv/apps/fridge-chatbot/.env"
 readonly DEPLOY_DIR="/srv/apps/fridge-chatbot"
 
-# Re-exec under sudo if not root (so /srv/apps writes succeed).
+# Re-exec under sudo if not root (so /srv/apps writes succeed). Remember the
+# caller's identity so we can hand the resulting .env back to them — IAP SSH
+# users have generated names like `smagowski_szymon_gmail_com`, not `ubuntu`.
 if [[ $EUID -ne 0 ]]; then
-    exec sudo -E "$0" "$@"
+    exec sudo -E SUDO_USER="${USER}" "$0" "$@"
 fi
+readonly OWNER="${SUDO_USER:-$(id -un)}"
 
 if ! command -v gcloud >/dev/null 2>&1; then
     echo "ERROR: gcloud not in PATH on the VM. Did the startup script run?" >&2
@@ -59,9 +62,24 @@ FRIDGE_LF_SEC=$(get "$APP_PROJECT" fridge-chatbot-langfuse-secret-key)
 FRIDGE_OAUTH_ID=$(get "$APP_PROJECT" fridge-chatbot-oauth-client-id)
 FRIDGE_OAUTH_SECRET=$(get "$APP_PROJECT" fridge-chatbot-oauth-client-secret)
 
-# Static IP for OAuth redirect + frontend NEXT_PUBLIC_BACKEND_URL until a domain is set.
+# Public base URL — used for OAuth redirect URI, ALLOWED_ORIGINS, and the
+# Langfuse NEXTAUTH_URL. Prefer the canonical HTTPS domain (Caddy handles the
+# cert); fall back to http://<VM_IP> if no domain is configured.
+#
+# Override via env: PUBLIC_DOMAIN=fridge-chatbot.duckdns.org ./fetch-secrets.sh
+: "${PUBLIC_DOMAIN:=fridge-chatbot.duckdns.org}"
 VM_IP=$(curl -fsSL -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip")
+if [[ -n "$PUBLIC_DOMAIN" ]]; then
+    PUBLIC_BASE_URL="https://${PUBLIC_DOMAIN}"
+    # LiveKit WebSocket signaling is reverse-proxied by Caddy at /livekit-ws/*.
+    # The LiveKit JS client appends /rtc/v1 to whatever serverUrl we hand it,
+    # so the path here is the prefix Caddy strips before proxying to :7880.
+    LIVEKIT_PUBLIC_URL="wss://${PUBLIC_DOMAIN}/livekit-ws"
+else
+    PUBLIC_BASE_URL="http://${VM_IP}"
+    LIVEKIT_PUBLIC_URL="ws://${VM_IP}:7880"
+fi
 
 # Image refs — caller (deploy.sh) overrides via env. Defaults to :latest.
 : "${FRIDGE_BACKEND_IMAGE:=europe-west1-docker.pkg.dev/ai-lab-fridge-chatbot/fridge-chatbot/backend:latest}"
@@ -80,7 +98,9 @@ FRIDGE_BACKEND_IMAGE=${FRIDGE_BACKEND_IMAGE}
 FRIDGE_FRONTEND_IMAGE=${FRIDGE_FRONTEND_IMAGE}
 
 # --- Public URL ---
-PUBLIC_BASE_URL=http://${VM_IP}
+PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+LIVEKIT_PUBLIC_URL=${LIVEKIT_PUBLIC_URL}
+VM_EXTERNAL_IP=${VM_IP}
 LANGFUSE_NEXTAUTH_URL=http://${VM_IP}:3001
 
 # --- Shared infra ---
@@ -111,7 +131,7 @@ FRIDGE_GOOGLE_CLIENT_SECRET=${FRIDGE_OAUTH_SECRET}
 EOF
 
 chmod 600 "$ENV_FILE"
-chown ubuntu:ubuntu "$ENV_FILE"
+chown "$OWNER":"$(id -gn "$OWNER")" "$ENV_FILE"
 
 echo "Wrote $ENV_FILE ($(grep -cE '^[A-Z]' "$ENV_FILE") values)"
 echo "VM external IP: $VM_IP"
