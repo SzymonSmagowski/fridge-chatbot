@@ -31,15 +31,19 @@ export function setAppLocale(next: AppLocale, options: { reload?: boolean } = {}
   paraglideSetLocale(next, { reload: options.reload ?? true });
 }
 
-const FALLBACK_LOCALE: AppLocale = "en";
+const FALLBACK_LOCALE: AppLocale = "pl";
 
 /**
- * First-load heuristic — picks Polish only when the browser language clearly
- * starts with "pl"; everything else falls back to English. Paraglide will
- * remember the choice in localStorage from then on.
+ * First-load heuristic — Polish-first for fresh kiosks. The fridge ships
+ * for Polish-speaking households (60+ parents, voice-first), so a brand-new
+ * device defaults to Polish. A browser explicitly reporting English flips
+ * back to English; everything else (including missing `navigator`) lands
+ * on Polish. The locale switcher in Settings persists overrides via
+ * Paraglide's localStorage strategy — this only fires on the very first
+ * paint of an unpaired/never-opened kiosk.
  */
 export function detectInitialLocale(): AppLocale {
   if (typeof navigator === "undefined") return FALLBACK_LOCALE;
   const lang = (navigator.language || "").toLowerCase();
-  return lang.startsWith("pl") ? "pl" : FALLBACK_LOCALE;
+  return lang.startsWith("en") ? "en" : FALLBACK_LOCALE;
 }

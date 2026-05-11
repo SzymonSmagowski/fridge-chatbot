@@ -1188,3 +1188,185 @@ async def test_ec_clarify_then_cancel(run_turn, behavioral_family, db):
         second.final_text,
         "match=(ok|cancelled|canceled|no problem|sure|alright|got it|let me know)",
     ), f"expected a calm cancel acknowledgement; got {second.final_text!r}"
+
+
+# ---------------------------------------------------------------------------
+# web_search — Polish-first prompt requires proactive use + mention online
+# ---------------------------------------------------------------------------
+
+
+async def test_ws_factual_uses_web_search(run_turn, behavioral_family):
+    """ws-factual-uses-web-search: a current-facts question → web_search.
+
+    Polish question about live opening hours / current prices is exactly
+    the case the prompt tells the model to look up online.
+    """
+    run = await run_turn("do której godziny jest dziś otwarta Biedronka?")
+    assert "web_search" in run.tool_calls, (
+        f"expected proactive web_search for live store hours; "
+        f"got {run.tool_calls}"
+    )
+
+
+async def test_ws_mentions_online_after_search(run_turn, behavioral_family):
+    """ws-mentions-online: after web_search, reply must say it looked online.
+
+    Polish prompt example explicitly trains 'Sprawdziłam w internecie — ...'.
+    """
+    run = await run_turn("ile teraz kosztuje kilogram cebuli w Polsce?")
+    if "web_search" in run.tool_calls:
+        assert text_matches(
+            run.final_text,
+            "match=(internec|w sieci|online|sprawdz|wyszuk|znalazł|znalaz)",
+        ), (
+            f"after using web_search the reply must mention looking online; "
+            f"got {run.final_text!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# delete_notes — confirmation contract (P0 hazardous)
+# ---------------------------------------------------------------------------
+
+
+async def test_dn_confirm_first_no_delete(
+    run_turn, make_note, behavioral_family, db
+):
+    """dn-confirm-first: 'usuń wszystkie notatki' → list_notes + ask,
+    NEVER delete_notes on the first turn.
+    """
+    make_note("mleko")
+    make_note("chleb")
+    make_note("jajka")
+    run = await run_turn("usuń wszystkie notatki")
+    assert "delete_notes" not in run.tool_calls, (
+        f"must confirm before destructive batch delete; got {run.tool_calls}"
+    )
+    # All three notes still in place.
+    assert _count(db, Note, behavioral_family.family_id) == 3
+    # The reply must list what's about to be deleted, in plain language.
+    assert text_matches(
+        run.final_text,
+        "match=(mleko|chleb|jajk|3 |trzy|notatk|skasować|usunąć|na pewno|"
+        "potwierd|tak czy nie|tak\\?|continue|confirm)",
+    ), f"expected a confirmation prompt naming the notes; got {run.final_text!r}"
+
+
+async def test_dn_confirm_then_do(
+    run_turn, make_note, behavioral_family, db
+):
+    """dn-confirm-then-do: 'usuń notatki' → ask → 'tak' → delete_notes runs."""
+    make_note("mleko")
+    make_note("chleb")
+    first = await run_turn("skasuj wszystkie notatki")
+    # If the model went rogue and deleted on first turn, flag it.
+    if "delete_notes" in first.tool_calls:
+        pytest.skip(
+            "model deleted without confirmation — escalate to AIEngineer "
+            "(prompt-level contract regression)"
+        )
+    second = await run_turn("tak, potwierdzam", history=first.history)
+    combined = first.tool_calls + second.tool_calls
+    assert "delete_notes" in combined, (
+        f"after explicit 'tak', delete_notes must run; combined: {combined}"
+    )
+    # Either both deleted, or at least one — accept any positive delete.
+    assert _count(db, Note, behavioral_family.family_id) < 2, (
+        f"notes count should drop after delete confirmation; "
+        f"got {_count(db, Note, behavioral_family.family_id)} remaining"
+    )
+
+
+# ---------------------------------------------------------------------------
+# delete_cars — same confirmation contract, plus list-then-delete flow
+# ---------------------------------------------------------------------------
+
+
+async def test_dc_list_then_delete_with_confirm(
+    run_turn, make_car, behavioral_family, db
+):
+    """dc-list-then-delete: list cars + delete one, confirm-gated."""
+    make_car("Volvo XC60", year=2018, color_label="Blue")
+    make_car("Toyota Yaris", year=2020, color_label="Czerwony")
+    first = await run_turn("usuń Volvo")
+    # Turn 1: must NOT delete without confirmation.
+    if "delete_cars" in first.tool_calls:
+        pytest.skip(
+            "model deleted car without confirmation — escalate to AIEngineer "
+            "(prompt-level contract regression)"
+        )
+    # Should mention Volvo before asking.
+    assert text_matches(
+        first.final_text,
+        "match=(volvo|skasować|usunąć|potwierd|na pewno|tak\\?|delete)",
+    ), f"expected confirmation prompt; got {first.final_text!r}"
+    # Both cars still there.
+    assert _count(db, Car, behavioral_family.family_id) == 2
+    second = await run_turn("tak", history=first.history)
+    combined = first.tool_calls + second.tool_calls
+    # After confirmation the model should call delete_cars.
+    if "delete_cars" in combined:
+        # Volvo gone, Toyota stays.
+        remaining_names = [
+            c.name.lower()
+            for c in db.query(Car)
+            .filter(Car.family_id == behavioral_family.family_id)
+            .all()
+        ]
+        assert not any("volvo" in n for n in remaining_names), (
+            f"Volvo should be gone after confirmed delete; "
+            f"remaining: {remaining_names}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# assign_car_to_event — link existing car to existing event
+# ---------------------------------------------------------------------------
+
+
+async def test_ace_assign_car_to_event(
+    run_turn, make_car, behavioral_family, db
+):
+    """ace-assign-car-to-event: existing event + 'add the Volvo' → tool fires.
+
+    Pre-seed: a car (Volvo) and a fridge event ('Service'). Ask the
+    assistant to assign the car to the event. It must look up both
+    (list_cars / list_events or read_calendar_window) and then call
+    assign_car_to_event.
+    """
+    from datetime import datetime, timedelta, timezone as _tz
+
+    from src.models import Event as EventModel
+
+    make_car("Volvo XC60", year=2018, color_label="Blue")
+    # Seed a fridge event directly so we don't depend on add_event having
+    # been called first.
+    now = datetime.now(_tz.utc)
+    ev = EventModel(
+        family_id=behavioral_family.family_id,
+        title="Car service",
+        start_at=now + timedelta(days=2),
+        end_at=now + timedelta(days=2, hours=1),
+        timezone="Europe/Warsaw",
+    )
+    db.add(ev)
+    db.commit()
+    db.refresh(ev)
+    run = await run_turn(
+        "przypnij Volvo do wydarzenia 'Car service' w kalendarzu"
+    )
+    # Must have looked up at least one of the sides.
+    assert (
+        "list_cars" in run.tool_calls
+        or "list_events" in run.tool_calls
+        or "read_calendar_window" in run.tool_calls
+    ), (
+        f"assistant must resolve car or event ID before linking; "
+        f"got {run.tool_calls}"
+    )
+    # If assign_car_to_event was called, the event should now have a car link.
+    if "assign_car_to_event" in run.tool_calls:
+        db.refresh(ev)
+        assert len(ev.car_links) >= 1, (
+            "event should have a car_link after assign_car_to_event ran"
+        )

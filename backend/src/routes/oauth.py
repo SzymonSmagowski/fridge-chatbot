@@ -215,6 +215,12 @@ async def _handle_pair_callback(
             family_id=family.id,
             sync_interval_sec=settings.SYNC_INTERVAL_SEC_DEFAULT,
             auto_create_shopping_list=settings.AUTO_CREATE_SHOPPING_LIST_DEFAULT,
+            # Polish-first: the target users are 60+ Polish-speaking parents.
+            # `voice_locale="pl"` pins both chat and voice graphs to Polish on
+            # the first turn; the detect_language node still flips to English
+            # for unmistakably English input. The language switcher in Settings
+            # (PATCH /api/family/preferences) lets households override this.
+            voice_locale="pl",
             updated_at=datetime.utcnow(),
         )
     )

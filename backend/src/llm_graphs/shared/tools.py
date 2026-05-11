@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.tools import tool
 from sqlalchemy.orm import sessionmaker
 
@@ -34,6 +35,7 @@ from src.core.settings import Settings
 from src.models import Car, Member, MemberStatus
 from src.models.feedback import FeedbackCategory
 from src.schemas.cars import CarCreateRequest
+from src.schemas.events import EventUpdateRequest
 from src.schemas.notes import NoteCreateRequest
 from src.services.car_service import CarService
 from src.services.chat_streaming import ChatStreamer
@@ -41,9 +43,12 @@ from src.services.event_service import EventListFilters, EventService
 from src.services.event_target_resolver import EventTargetResolver
 from src.services.feedback_service import FeedbackService
 from src.services.label_service import LabelService
+from src.services.logger import get_logger
 from src.services.member_service import MemberService
 from src.services.note_service import NoteListFilters, NoteService
 from src.services.redis_service import get_redis_client
+
+logger = get_logger("llm_tools")
 
 # Tool-layer caps so the LLM never receives an arbitrarily large payload that
 # could blow its context window. REST clients still get the full list via the
@@ -127,12 +132,14 @@ def build_tools(
 
     @tool
     def list_notes(label_slug: str | None = None) -> dict:
-        """List notes for this family. Optional label_slug filter.
+        """Wyświetla notatki rodziny (opcjonalnie filtrowane po etykiecie).
 
-        Capped at the 50 most recent notes to protect the LLM's context.
-        Returns terse summaries — no UUIDs, timestamps, or other technical
-        fields the assistant might accidentally read aloud. There is no
-        edit-by-id tool, so the LLM doesn't need note IDs anyway.
+        List notes for this family. Optional label_slug filter.
+
+        Returns up to 50 most recent notes with `id`, `content`, `labels`,
+        `pinned`, `assigned_to`. The `id` field is needed for `delete_notes`
+        — pass IDs through silently, never read them aloud. The prompt
+        forbids speaking any UUID.
         """
         with session_factory() as db:
             labels = LabelService(db, family_id, streamer)
@@ -142,6 +149,7 @@ def build_tools(
             )
             summaries = [
                 {
+                    "id": str(n.id),
                     "content": n.content,
                     "labels": [link.label.slug for link in (n.label_links or [])],
                     "pinned": bool(n.pinned),
@@ -265,12 +273,16 @@ def build_tools(
     def read_calendar_window(
         from_iso: str, to_iso: str, member_id: str | None = None
     ) -> dict:
-        """List events in a time window. Returns merged fridge + external rows.
+        """Wyświetla wydarzenia w danym oknie czasowym (kalendarz rodziny +
+        zsynchronizowany Google Calendar).
 
-        Capped at 50 events combined (fridge + external) to protect the LLM's
-        context. Returns terse summaries — title, ISO times, location, who
-        it's assigned to. No event UUIDs, no per-target sync state, no
-        timestamps. The LLM converts ISO times to spoken form.
+        List events in a time window. Returns merged fridge + external rows.
+
+        Capped at 50 events combined. Each `fridge` row includes `id` for
+        chained tools (`delete_events`, `assign_car_to_event`); `external`
+        rows have no `id` (they come from Google and can't be deleted by us).
+        Never read `id` aloud — pass it through silently. The LLM converts
+        ISO times to spoken form.
         """
         with session_factory() as db:
             resolver = EventTargetResolver(db, family_id)
@@ -293,7 +305,19 @@ def build_tools(
             remaining -= len(capped_fridge)
             capped_external = external[:max(remaining, 0)]
 
-            def _summarize(row: dict) -> dict:
+            def _summarize_fridge(row: dict) -> dict:
+                return {
+                    "id": row.get("id"),
+                    "title": row.get("title"),
+                    "starts_at": row.get("start_at"),
+                    "ends_at": row.get("end_at"),
+                    "location": row.get("location"),
+                    "assigned_to": _member_name(db, row.get("assignee_member_id")),
+                }
+
+            def _summarize_external(row: dict) -> dict:
+                # External (Google) rows have no fridge-side UUID, so omit
+                # the id field — assistant must not pretend it can delete them.
                 return {
                     "title": row.get("title"),
                     "starts_at": row.get("start_at"),
@@ -303,8 +327,8 @@ def build_tools(
                 }
 
             return {
-                "fridge": [_summarize(r) for r in capped_fridge],
-                "external": [_summarize(r) for r in capped_external],
+                "fridge": [_summarize_fridge(r) for r in capped_fridge],
+                "external": [_summarize_external(r) for r in capped_external],
                 "total_count": total,
                 "truncated": (len(capped_fridge) + len(capped_external)) < total,
             }
@@ -373,7 +397,11 @@ def build_tools(
         color_label: str | None = None,
         notes: str | None = None,
     ) -> dict:
-        """Add a car to this family. `color_label` is the spoken color (e.g. 'Red', 'White')."""
+        """Dodaje samochód do rodziny.
+
+        Add a car to this family. `color_label` is the spoken color
+        (e.g. 'Red', 'White', 'Czerwony', 'Biały').
+        """
         current_actor.set("chat-tool")
         with session_factory() as db:
             cars = CarService(db, family_id, streamer)
@@ -393,6 +421,275 @@ def build_tools(
                 "year": car.year,
                 "color": car.color_label,
             }
+
+    # ------------------------------------------------------------------
+    # Batch deletes — confirmation-gated at the prompt level. See the
+    # base prompt's "POTWIERDZENIA przed kasowaniem" section.
+    # ------------------------------------------------------------------
+
+    @tool
+    async def delete_notes(note_ids: list[str]) -> dict:
+        """Kasuje kilka notatek naraz. ZAWSZE potwierdź z użytkownikiem
+        przed wywołaniem (wymień nazwy, poczekaj na 'tak').
+
+        Batch-delete notes by UUID. Pass IDs from a previous `list_notes`
+        call. Skips invalid UUIDs and notes from other families silently.
+        Returns count + names of deleted notes.
+        """
+        current_actor.set("chat-tool")
+        deleted_names: list[str] = []
+        skipped: list[str] = []
+        with session_factory() as db:
+            notes = NoteService(
+                db, family_id, LabelService(db, family_id, streamer), streamer
+            )
+            for raw_id in note_ids or []:
+                try:
+                    nid = UUID(str(raw_id))
+                except (TypeError, ValueError):
+                    skipped.append(str(raw_id))
+                    continue
+                try:
+                    note = notes.get(nid)
+                except Exception:  # noqa: BLE001
+                    skipped.append(str(raw_id))
+                    continue
+                preview = (note.content or "").strip().splitlines()[:1]
+                deleted_names.append(preview[0] if preview else "(empty)")
+                await notes.delete(nid)
+            await _invalidate_list_cache("notes")
+        return {
+            "ok": True,
+            "what": "notes_deleted",
+            "count": len(deleted_names),
+            "names": deleted_names,
+            "skipped": skipped,
+        }
+
+    @tool
+    def list_events(
+        from_iso: str | None = None,
+        to_iso: str | None = None,
+        member_id: str | None = None,
+    ) -> dict:
+        """Wyświetla wydarzenia rodziny. Domyślnie ostatnie 30 dni +
+        kolejne 90 dni.
+
+        Lighter wrapper around `read_calendar_window` for "give me ALL
+        events" intents that don't have a clear window. Defaults to a
+        120-day window centered on today when both endpoints are
+        omitted. Returns the same payload shape as
+        `read_calendar_window` (fridge rows have `id`, external rows do
+        not).
+        """
+        from datetime import timedelta, timezone as _tz
+
+        now = datetime.now(_tz.utc)
+        from_dt = (
+            datetime.fromisoformat(from_iso.replace("Z", "+00:00"))
+            if from_iso
+            else now - timedelta(days=30)
+        )
+        to_dt = (
+            datetime.fromisoformat(to_iso.replace("Z", "+00:00"))
+            if to_iso
+            else now + timedelta(days=90)
+        )
+        with session_factory() as db:
+            resolver = EventTargetResolver(db, family_id)
+            events = EventService(db, family_id, resolver, streamer)
+            result = events.list(
+                EventListFilters(
+                    from_dt=from_dt,
+                    to_dt=to_dt,
+                    member_id=UUID(member_id) if member_id else None,
+                    car_id=None,
+                    source="all",
+                )
+            )
+            payload = result.model_dump(mode="json")
+            total = payload["total"]
+            fridge = payload["fridge"][:CALENDAR_WINDOW_TOOL_CAP]
+            return {
+                "events": [
+                    {
+                        "id": row.get("id"),
+                        "title": row.get("title"),
+                        "starts_at": row.get("start_at"),
+                        "ends_at": row.get("end_at"),
+                        "location": row.get("location"),
+                        "assigned_to": _member_name(
+                            db, row.get("assignee_member_id")
+                        ),
+                        "cars": _car_names(db, row.get("car_ids") or []),
+                    }
+                    for row in fridge
+                ],
+                "total_count": total,
+                "truncated": len(fridge) < total,
+            }
+
+    @tool
+    async def delete_events(event_ids: list[str]) -> dict:
+        """Kasuje kilka wydarzeń z kalendarza naraz. ZAWSZE potwierdź
+        przed wywołaniem (wymień tytuły, poczekaj na 'tak').
+
+        Batch-delete events by UUID. Pass IDs from `list_events` or
+        `read_calendar_window` (fridge rows only — external Google rows
+        are read-only and have no fridge UUID). Skips invalid/foreign
+        IDs silently. Returns count + titles of deleted events.
+        """
+        current_actor.set("chat-tool")
+        deleted_titles: list[str] = []
+        skipped: list[str] = []
+        with session_factory() as db:
+            resolver = EventTargetResolver(db, family_id)
+            events = EventService(db, family_id, resolver, streamer)
+            for raw_id in event_ids or []:
+                try:
+                    eid = UUID(str(raw_id))
+                except (TypeError, ValueError):
+                    skipped.append(str(raw_id))
+                    continue
+                try:
+                    ev = events.get(eid)
+                except Exception:  # noqa: BLE001
+                    skipped.append(str(raw_id))
+                    continue
+                deleted_titles.append(ev.title)
+                await events.delete(eid)
+            await _invalidate_list_cache("events")
+        return {
+            "ok": True,
+            "what": "events_deleted",
+            "count": len(deleted_titles),
+            "titles": deleted_titles,
+            "skipped": skipped,
+        }
+
+    @tool
+    async def delete_cars(car_ids: list[str]) -> dict:
+        """Kasuje kilka samochodów naraz. ZAWSZE potwierdź przed
+        wywołaniem (wymień nazwy, poczekaj na 'tak').
+
+        Batch hard-delete cars by UUID. Pass IDs from `list_cars`.
+        Skips invalid/foreign IDs silently. Returns count + names of
+        deleted cars.
+        """
+        current_actor.set("chat-tool")
+        deleted_names: list[str] = []
+        skipped: list[str] = []
+        with session_factory() as db:
+            cars = CarService(db, family_id, streamer)
+            for raw_id in car_ids or []:
+                try:
+                    cid = UUID(str(raw_id))
+                except (TypeError, ValueError):
+                    skipped.append(str(raw_id))
+                    continue
+                try:
+                    car = cars.get(cid)
+                except Exception:  # noqa: BLE001
+                    skipped.append(str(raw_id))
+                    continue
+                deleted_names.append(car.name)
+                await cars.hard_delete(cid)
+            await _invalidate_list_cache("cars")
+        return {
+            "ok": True,
+            "what": "cars_deleted",
+            "count": len(deleted_names),
+            "names": deleted_names,
+            "skipped": skipped,
+        }
+
+    @tool
+    async def assign_car_to_event(event_id: str, car_id: str) -> dict:
+        """Przypisuje samochód do istniejącego wydarzenia w kalendarzu
+        (np. 'serwis Volvo we wtorek' → przypnij Volvo do wydarzenia).
+
+        Link a car to an existing fridge event. The car is added to the
+        event's car_ids list (replaces previous cars on the event by
+        design — the service-layer update treats car_ids as
+        authoritative). Returns the event title + the car name on
+        success.
+        """
+        current_actor.set("chat-tool")
+        try:
+            eid = UUID(str(event_id))
+            cid = UUID(str(car_id))
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "what": "error", "detail": f"Bad UUID: {exc}"}
+        with session_factory() as db:
+            resolver = EventTargetResolver(db, family_id)
+            events = EventService(db, family_id, resolver, streamer)
+            cars = CarService(db, family_id, streamer)
+            try:
+                car = cars.get(cid)
+            except Exception:  # noqa: BLE001
+                return {
+                    "ok": False,
+                    "what": "error",
+                    "detail": "Car not found in this family.",
+                }
+            try:
+                ev = events.get(eid)
+            except Exception:  # noqa: BLE001
+                return {
+                    "ok": False,
+                    "what": "error",
+                    "detail": "Event not found in this family.",
+                }
+            existing_car_ids = [link.car_id for link in (ev.car_links or [])]
+            if cid not in existing_car_ids:
+                existing_car_ids.append(cid)
+            await events.update(
+                eid,
+                EventUpdateRequest(car_ids=existing_car_ids),
+            )
+            await _invalidate_list_cache("events")
+            return {
+                "ok": True,
+                "what": "event_car_linked",
+                "event_title": ev.title,
+                "car_name": car.name,
+            }
+
+    # ------------------------------------------------------------------
+    # Web search — DuckDuckGo, no API key. Built once per build_tools()
+    # call so we don't pay the wrapper-construction cost per turn.
+    # ------------------------------------------------------------------
+    _ddg_search = DuckDuckGoSearchRun()
+
+    @tool
+    def web_search(query: str) -> str:
+        """Szuka w internecie (DuckDuckGo). Używaj PROAKTYWNIE, gdy nie
+        znasz aktualnego faktu — bieżące wydarzenia, ceny, godziny
+        otwarcia sklepów, kursy walut, pogoda, zamienniki w przepisach.
+        Po użyciu zawsze wspomnij użytkownikowi, że sprawdziłaś online.
+
+        Search the web via DuckDuckGo (no API key). Returns a short
+        text blob of top results. The assistant must summarize the
+        result for the user — never paste the raw output. The assistant
+        must also tell the user it looked online, in their language
+        (e.g. 'Sprawdziłam w internecie — ...' / 'I checked online — ...').
+        Use only for facts you don't already know; not for basic math,
+        definitions, or recipes you can give from memory.
+        """
+        try:
+            raw = _ddg_search.invoke(query)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("web_search failed for query=%r: %s", query, exc)
+            return (
+                "Web search is temporarily unavailable. Tell the user you "
+                "couldn't reach the internet right now."
+            )
+        # DuckDuckGoSearchRun returns a single string of concatenated
+        # snippets. Cap to keep the LLM context bounded.
+        text = raw if isinstance(raw, str) else str(raw)
+        if len(text) > 2000:
+            text = text[:2000] + "…"
+        return text
 
     @tool
     async def submit_feedback(
@@ -435,13 +732,19 @@ def build_tools(
         list_notes,
         add_note,
         add_to_shopping_list,
+        delete_notes,
         add_event,
         read_calendar_window,
+        list_events,
+        delete_events,
+        assign_car_to_event,
         set_member_inactive,
         set_member_active,
         list_members,
         list_cars,
         add_car,
+        delete_cars,
+        web_search,
         submit_feedback,
     ]
 

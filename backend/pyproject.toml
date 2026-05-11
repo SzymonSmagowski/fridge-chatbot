@@ -58,6 +58,8 @@ livekit-plugins-openai = "^1.4"
 livekit-plugins-silero = "^1.4"
 livekit-plugins-langchain = "^1.4"
 python-dateutil = "^2.9.0.post0"
+langchain-community = "^0.4.1"
+ddgs = "^9.14.2"
 
 [build-system]
 requires = ["poetry-core"]
