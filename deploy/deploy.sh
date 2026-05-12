@@ -68,12 +68,38 @@ gcloud artifacts docker tags add "$FRONTEND_IMG" "$FRONTEND_LATEST" --quiet
 
 # --- 3. Copy deploy artifacts to VM ------------------------------------------
 # IAP SSH uses an OS-Login-generated user (e.g. smagowski_szymon_gmail_com),
-# not `ubuntu`. Chown to `$(id -un)` so the upcoming scp can write directly,
-# then leave the dir owned by that user for subsequent re-deploys.
+# not `ubuntu`. The next step's `scp` overwrites four specific files in
+# /srv/apps/fridge-chatbot/ — we chown only those (plus the dir) to the
+# connecting user so scp can write directly.
+#
+# DO NOT `chown -R /srv/apps/fridge-chatbot` here. The same path also holds
+# `data/` — Docker bind-mount roots for postgres, redis, clickhouse, minio.
+# A recursive chown reassigns Postgres's data files away from UID 70 and
+# the database silently bricks itself on the next new connection
+# (`could not open file "global/pg_filenode.map": Permission denied`).
+# See incident 2026-05-12: chown -R wiped postgres ownership during a
+# deploy retry. Recovery requires `sudo chown -R 70:70 data/postgres`
+# and a postgres restart.
+#
+# `touch` first so a fresh VM (where the files don't exist yet) doesn't
+# error on the chown; touch is a no-op when the file already exists.
 echo "==> Copy compose/Caddyfile/fetch-secrets.sh to VM"
 gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
     --tunnel-through-iap --quiet \
-    --command='sudo mkdir -p /srv/apps/fridge-chatbot && sudo chown "$(id -un)":"$(id -gn)" /srv/apps/fridge-chatbot'
+    --command='set -e
+        sudo mkdir -p /srv/apps/fridge-chatbot
+        sudo touch \
+            /srv/apps/fridge-chatbot/docker-compose.prod.yml \
+            /srv/apps/fridge-chatbot/Caddyfile \
+            /srv/apps/fridge-chatbot/fetch-secrets.sh \
+            /srv/apps/fridge-chatbot/provision-langfuse-org.sh
+        sudo chown "$(id -un)":"$(id -gn)" \
+            /srv/apps/fridge-chatbot \
+            /srv/apps/fridge-chatbot/docker-compose.prod.yml \
+            /srv/apps/fridge-chatbot/Caddyfile \
+            /srv/apps/fridge-chatbot/fetch-secrets.sh \
+            /srv/apps/fridge-chatbot/provision-langfuse-org.sh
+    '
 
 gcloud compute scp --tunnel-through-iap \
     --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
