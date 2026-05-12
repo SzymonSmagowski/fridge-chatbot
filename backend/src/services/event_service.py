@@ -1,6 +1,11 @@
-"""EventService — local CRUD for fridge events. Google fan-out is enqueued via
-BackgroundTasks in the route handler so the request can return immediately
-with `sync_status=pending` per §1.
+"""EventService — local CRUD for fridge events + Google fan-out enqueue.
+
+Fan-out used to be the route handler's responsibility (FastAPI BackgroundTasks),
+which silently dropped writes coming from the chat/voice tool path. Ownership
+now sits in the service so every caller — REST, LLM tool, future cron — gets
+the Google Calendar push for free. Implementation: `asyncio.create_task` on
+the shared event loop after commit. Same fire-and-forget shape as
+BackgroundTasks, but no FastAPI dependency.
 
 Recurring scope semantics (D8) for PATCH/DELETE land here as light branches —
 the heavy "this and following" mechanic short-circuits to a TODO branch in v1
@@ -10,14 +15,15 @@ silently misbehave).
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 from dateutil.rrule import rrulestr
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.core.context import current_actor
 from src.core.family_events import family_event_payload
@@ -45,6 +51,11 @@ from src.services.google_calendar_service import GoogleCalendarService
 from src.services.google_token_service import GoogleTokenService
 from src.services.logger import get_logger
 
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+
+    from src.core.settings import Settings
+
 logger = get_logger("event_service")
 
 EventScope = Literal["instance", "all_future"]
@@ -69,6 +80,9 @@ class EventService:
         streamer: ChatStreamer,
         calendar: GoogleCalendarService | None = None,
         token_service: GoogleTokenService | None = None,
+        settings: "Settings | None" = None,
+        session_factory: sessionmaker | None = None,
+        redis: "Redis | None" = None,
     ) -> None:
         self.db = db
         self.family_id = family_id
@@ -76,6 +90,13 @@ class EventService:
         self.streamer = streamer
         self.calendar = calendar
         self.token_service = token_service
+        # Fan-out deps. All-or-nothing: when any is None the service still
+        # works for local CRUD but skips the Google push (with a warning).
+        # Tests that don't exercise sync can keep their existing 4-arg
+        # construction.
+        self._settings = settings
+        self._session_factory = session_factory
+        self._redis = redis
 
     async def _publish(self, *, type: str, event_id: UUID) -> None:
         await self.streamer.publish_family_event(
@@ -86,6 +107,44 @@ class EventService:
                 id=event_id,
                 actor=current_actor.get(),
             ),
+        )
+
+    def _enqueue_fanout(self, event: Event) -> None:
+        """Spawn an asyncio task that pushes each `pending` target to Google.
+
+        Idempotent across overlapping enqueues: `sync_target` takes a Redis
+        SETNX lock per (event_id, member_id) and bails when another worker
+        holds it. Safe to call from both routes and the chat-tool path.
+        """
+        target_ids = [
+            t.id
+            for t in event.targets
+            if t.sync_status == EventTargetSyncStatus.pending
+        ]
+        if not target_ids:
+            return
+        if (
+            self._settings is None
+            or self._session_factory is None
+            or self._redis is None
+        ):
+            logger.warning(
+                "fan-out skipped for event %s: EventService missing settings/session_factory/redis. "
+                "Pass them in the EventService constructor to enable Google Calendar push.",
+                event.id,
+            )
+            return
+        # Late import to avoid worker→service cycle.
+        from src.workers.calendar_write_worker import fan_out_event
+
+        asyncio.create_task(
+            fan_out_event(
+                event_id=event.id,
+                target_ids=target_ids,
+                settings=self._settings,
+                session_factory=self._session_factory,
+                redis=self._redis,
+            )
         )
 
     # ---- reads -------------------------------------------------------------
@@ -202,6 +261,7 @@ class EventService:
         self.db.commit()
         self.db.refresh(ev)
         await self._publish(type="event.created", event_id=ev.id)
+        self._enqueue_fanout(ev)
         return ev, plans
 
     async def update(
@@ -244,6 +304,7 @@ class EventService:
         self.db.commit()
         self.db.refresh(ev)
         await self._publish(type="event.updated", event_id=ev.id)
+        self._enqueue_fanout(ev)
         return ev
 
     async def delete(self, event_id: UUID, scope: EventScope = "instance") -> None:
@@ -278,6 +339,14 @@ class EventService:
         self.db.commit()
 
     async def resync(self, event_id: UUID) -> Event:
+        """Reset failed targets to pending and re-enqueue the fan-out.
+
+        Also picks up stale `pending` targets — historically those came from
+        the chat-tool path which never enqueued fan-out (fixed 2026-05-12),
+        so re-running this on an old event drains the orphan backlog.
+        `sync_target` is single-flight on Redis so this is safe to call even
+        if a write is already in flight.
+        """
         ev = self.get(event_id)
         for target in ev.targets:
             if target.sync_status == EventTargetSyncStatus.failed:
@@ -286,6 +355,7 @@ class EventService:
         self.db.commit()
         self.db.refresh(ev)
         await self._publish(type="event.resync", event_id=ev.id)
+        self._enqueue_fanout(ev)
         return ev
 
     # ---- response builder --------------------------------------------------

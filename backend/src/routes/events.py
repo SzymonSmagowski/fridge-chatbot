@@ -1,6 +1,8 @@
 """Events endpoints (§5.7) — fridge events + external cache reads.
 
-Background calendar fan-out is enqueued via FastAPI BackgroundTasks per D3.
+Google Calendar fan-out is enqueued inside `EventService` itself (so the
+chat-tool path gets it too — see services/event_service.py). The route just
+calls the service and returns.
 """
 from __future__ import annotations
 
@@ -8,9 +10,8 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
+from fastapi import APIRouter, Depends, Response, status
 from redis.asyncio import Redis
-from sqlalchemy.orm import sessionmaker
 
 from src.core.cache import cache_aside, family_key, invalidate, sha1_short
 from src.core.dependencies import (
@@ -18,11 +19,7 @@ from src.core.dependencies import (
     get_device_context,
     get_event_service,
     get_redis,
-    get_session_factory_dep,
-    get_settings,
 )
-from src.core.settings import Settings
-from src.models import EventTargetSyncStatus
 from src.schemas.events import (
     EventCreateRequest,
     EventListResponse,
@@ -30,7 +27,6 @@ from src.schemas.events import (
     EventUpdateRequest,
 )
 from src.services.event_service import EventListFilters, EventService
-from src.workers.calendar_write_worker import fan_out_event
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -91,29 +87,12 @@ async def list_events(
 @router.post("", response_model=EventResponse, status_code=status.HTTP_201_CREATED)
 async def create_event(
     body: EventCreateRequest,
-    background_tasks: BackgroundTasks,
     ctx: DeviceContext = Depends(get_device_context),
     events_service: EventService = Depends(get_event_service),
     redis: Redis = Depends(get_redis),
-    session_factory: sessionmaker = Depends(get_session_factory_dep),
-    settings: Settings = Depends(get_settings),
 ):
     event, _plans = await events_service.create(body)
-    target_ids = [
-        t.id for t in event.targets if t.sync_status == EventTargetSyncStatus.pending
-    ]
-
     await _invalidate(redis, ctx.family_id, event.id)
-
-    if target_ids:
-        background_tasks.add_task(
-            fan_out_event,
-            event_id=event.id,
-            target_ids=target_ids,
-            settings=settings,
-            session_factory=session_factory,
-            redis=redis,
-        )
     return events_service.to_response(event)
 
 
@@ -164,25 +143,10 @@ async def delete_event(
 @router.post("/{event_id}/resync", response_model=EventResponse)
 async def resync_event(
     event_id: UUID,
-    background_tasks: BackgroundTasks,
     ctx: DeviceContext = Depends(get_device_context),
     events_service: EventService = Depends(get_event_service),
     redis: Redis = Depends(get_redis),
-    session_factory: sessionmaker = Depends(get_session_factory_dep),
-    settings: Settings = Depends(get_settings),
 ):
     event = await events_service.resync(event_id)
-    target_ids = [
-        t.id for t in event.targets if t.sync_status == EventTargetSyncStatus.pending
-    ]
     await _invalidate(redis, ctx.family_id, event_id)
-    if target_ids:
-        background_tasks.add_task(
-            fan_out_event,
-            event_id=event.id,
-            target_ids=target_ids,
-            settings=settings,
-            session_factory=session_factory,
-            redis=redis,
-        )
     return events_service.to_response(event)

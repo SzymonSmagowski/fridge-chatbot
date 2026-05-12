@@ -113,6 +113,21 @@ def build_tools(
     redis = get_redis_client(settings)
     streamer = ChatStreamer(redis)
 
+    def _make_events(db) -> EventService:
+        """EventService with fan-out wiring. Without these three deps the
+        service silently skips the Google Calendar push (see EventService
+        ._enqueue_fanout)."""
+        resolver = EventTargetResolver(db, family_id)
+        return EventService(
+            db,
+            family_id,
+            resolver,
+            streamer,
+            settings=settings,
+            session_factory=session_factory,
+            redis=redis,
+        )
+
     async def _invalidate_list_cache(*entity_namespaces: str) -> None:
         """Drop the family's cached list responses for the given REST cache
         namespaces (`"notes"`, `"events"`, `"cars"`, `"members"`).
@@ -233,8 +248,7 @@ def build_tools(
 
         current_actor.set("chat-tool")
         with session_factory() as db:
-            resolver = EventTargetResolver(db, family_id)
-            events = EventService(db, family_id, resolver, streamer)
+            events = _make_events(db)
             ev, _ = await events.create(
                 EventCreateRequest(
                     title=title,
@@ -285,8 +299,7 @@ def build_tools(
         ISO times to spoken form.
         """
         with session_factory() as db:
-            resolver = EventTargetResolver(db, family_id)
-            events = EventService(db, family_id, resolver, streamer)
+            events = _make_events(db)
             result = events.list(
                 EventListFilters(
                     from_dt=datetime.fromisoformat(from_iso.replace("Z", "+00:00")),
@@ -496,8 +509,7 @@ def build_tools(
             else now + timedelta(days=90)
         )
         with session_factory() as db:
-            resolver = EventTargetResolver(db, family_id)
-            events = EventService(db, family_id, resolver, streamer)
+            events = _make_events(db)
             result = events.list(
                 EventListFilters(
                     from_dt=from_dt,
@@ -543,8 +555,7 @@ def build_tools(
         deleted_titles: list[str] = []
         skipped: list[str] = []
         with session_factory() as db:
-            resolver = EventTargetResolver(db, family_id)
-            events = EventService(db, family_id, resolver, streamer)
+            events = _make_events(db)
             for raw_id in event_ids or []:
                 try:
                     eid = UUID(str(raw_id))
@@ -621,8 +632,7 @@ def build_tools(
         except (TypeError, ValueError) as exc:
             return {"ok": False, "what": "error", "detail": f"Bad UUID: {exc}"}
         with session_factory() as db:
-            resolver = EventTargetResolver(db, family_id)
-            events = EventService(db, family_id, resolver, streamer)
+            events = _make_events(db)
             cars = CarService(db, family_id, streamer)
             try:
                 car = cars.get(cid)

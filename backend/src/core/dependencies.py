@@ -217,6 +217,9 @@ def get_event_service(
     streamer: ChatStreamer = Depends(get_chat_streamer),
     calendar: GoogleCalendarService = Depends(get_google_calendar_service),
     token_service: GoogleTokenService = Depends(get_google_token_service),
+    settings: Settings = Depends(get_settings),
+    session_factory: sessionmaker = Depends(get_session_factory_dep),
+    redis: Redis = Depends(get_redis),
 ) -> EventService:
     return EventService(
         db,
@@ -225,6 +228,9 @@ def get_event_service(
         streamer,
         calendar=calendar,
         token_service=token_service,
+        settings=settings,
+        session_factory=session_factory,
+        redis=redis,
     )
 
 

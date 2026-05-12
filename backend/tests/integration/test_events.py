@@ -73,8 +73,8 @@ def test_post_event_with_assignee_creates_one_target_pending(
     _connect_member_google(db, dad.id)
 
     # Stub the BackgroundTasks fan-out so it doesn't kick off real Google work.
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     start = datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc)
     end = start + timedelta(hours=1)
@@ -113,8 +113,8 @@ def test_post_event_with_no_assignee_fans_out_to_all_active_members(
     _connect_member_google(db, dad.id)
     _connect_member_google(db, inactive.id)
 
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     resp = client.post(
         "/api/events",
@@ -141,8 +141,8 @@ def test_post_event_skips_member_without_google_connection(
     dad = _create_member_via_db(db, family_id, name="Dad", color="amber")
     # No google_token row for Dad.
 
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     resp = client.post(
         "/api/events",
@@ -174,8 +174,8 @@ def test_post_event_with_car_only_fans_out_to_all_active_members(
         "/api/cars", headers=auth_headers, json={"name": "Volvo"}
     ).json()
 
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     resp = client.post(
         "/api/events",
@@ -222,8 +222,8 @@ def test_post_event_with_end_before_start_returns_400(
     client: TestClient, auth_headers, monkeypatch
 ) -> None:
     """Service-layer validation: end_at must be >= start_at."""
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     resp = client.post(
         "/api/events",
@@ -242,8 +242,8 @@ def test_post_event_with_malformed_rrule_returns_400(
     client: TestClient, auth_headers, monkeypatch
 ) -> None:
     """Service-layer validation: rrule must parse via dateutil.rrulestr."""
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     resp = client.post(
         "/api/events",
@@ -264,8 +264,8 @@ def test_post_event_with_valid_rrule_succeeds(
     client: TestClient, auth_headers, monkeypatch
 ) -> None:
     """Sanity check: a syntactically valid RRULE passes validation."""
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     resp = client.post(
         "/api/events",
@@ -285,8 +285,8 @@ def test_post_event_with_cross_family_assignee_returns_404(
     client: TestClient, auth_headers, db, make_family, monkeypatch
 ) -> None:
     """Family-ownership check: assignee_member_id from another family is rejected."""
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     other_family_id, _, _ = make_family(family_name="Other Family")
     intruder = _create_member_via_db(db, other_family_id, name="Intruder")
@@ -309,8 +309,8 @@ def test_post_event_with_cross_family_car_returns_404(
     client: TestClient, auth_headers, make_family, monkeypatch
 ) -> None:
     """Family-ownership check: car_ids from another family are rejected."""
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     _other_family, _device, other_token = make_family(family_name="Other Family")
     other_car = client.post(
@@ -353,8 +353,8 @@ def test_get_events_returns_fridge_external_envelope(
 def test_get_event_in_other_family_returns_404(
     client: TestClient, auth_headers, make_family, monkeypatch
 ) -> None:
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     _other_fam, _device, other_token = make_family(family_name="Other")
     other_event = client.post(
@@ -379,8 +379,8 @@ def test_get_event_in_other_family_returns_404(
 def test_patch_event_updates_title(
     client: TestClient, auth_headers, monkeypatch
 ) -> None:
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     created = client.post(
         "/api/events",
@@ -403,8 +403,8 @@ def test_patch_event_updates_title(
 def test_delete_event_returns_204(
     client: TestClient, auth_headers, monkeypatch, db
 ) -> None:
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     created = client.post(
         "/api/events",
@@ -428,8 +428,8 @@ def test_resync_event_flips_failed_targets_to_pending(
     member = _create_member_via_db(db, family_id, name="Mom", color="rose")
     _connect_member_google(db, member.id)
 
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     created = client.post(
         "/api/events",
@@ -471,8 +471,8 @@ async def test_post_event_publishes_event_created_frame(
     client: TestClient, auth_headers, family, family_event_collector, monkeypatch
 ) -> None:
     family_id, _, _ = family
-    from src.routes import events as events_route
-    monkeypatch.setattr(events_route, "fan_out_event", _async_no_op)
+    from src.workers import calendar_write_worker
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _async_no_op)
 
     async with family_event_collector(family_id) as collector:
         client.post(

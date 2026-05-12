@@ -69,12 +69,16 @@ def stubbed_oauth(app):
 
 @pytest.fixture
 def stubbed_fan_out(monkeypatch):
-    from src.routes import events as events_route
+    # Fan-out moved from the route to EventService (2026-05-12). The service
+    # imports `fan_out_event` lazily inside `_enqueue_fanout` from this module,
+    # so patch the symbol at its source — that intercepts whichever caller
+    # (route or chat-tool) triggers the enqueue.
+    from src.workers import calendar_write_worker
 
     async def _no_op(**kwargs):
         return None
 
-    monkeypatch.setattr(events_route, "fan_out_event", _no_op)
+    monkeypatch.setattr(calendar_write_worker, "fan_out_event", _no_op)
 
 
 # ---------------------------------------------------------------------------
