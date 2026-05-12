@@ -165,7 +165,10 @@ class GoogleCalendarService:
             if sync_token:
                 kwargs["syncToken"] = sync_token
             elif time_min:
-                kwargs["timeMin"] = time_min.isoformat() + "Z"
+                # RFC 3339: a tz-aware UTC datetime already serializes as
+                # "...+00:00" — appending "Z" produces "+00:00Z" which Google
+                # rejects with 400. Normalize to the Z form instead.
+                kwargs["timeMin"] = time_min.isoformat().replace("+00:00", "Z")
 
             items: list[dict[str, Any]] = []
             page_token: str | None = None

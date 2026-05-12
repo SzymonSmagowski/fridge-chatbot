@@ -162,6 +162,7 @@ async def google_callback(
             crypto=crypto,
             auth_service=auth_service,
             settings=settings,
+            session_factory=session_factory,
         )
     if kind == "connect":
         return await _handle_connect_callback(
@@ -188,6 +189,7 @@ async def _handle_pair_callback(
     crypto: CryptoService,
     auth_service: AuthService,
     settings: Settings,
+    session_factory,
 ) -> RedirectResponse:
     label_value = await redis.get(f"{PAIRING_KEY_PREFIX}{pairing_id}")
     if label_value is None:
@@ -290,6 +292,22 @@ async def _handle_pair_callback(
         )
 
     db.commit()
+
+    # Pull this member's Google Calendar immediately so events appear on the
+    # kiosk right after pairing instead of waiting up to SYNC_INTERVAL_SEC_DEFAULT
+    # for the next polling tick. Mirrors the connect-additional-member path.
+    try:
+        await _pull_member(
+            member_id=member.id,
+            family_id=family.id,
+            settings=settings,
+            session_factory=session_factory,
+            redis=redis,
+            crypto=crypto,
+            calendar=GoogleCalendarService(),
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort; polling will retry
+        logger.warning("immediate pull on pair for member %s failed: %s", member.id, exc)
 
     device_token = auth_service.create_device_token(
         device_id=device.id, family_id=family.id
