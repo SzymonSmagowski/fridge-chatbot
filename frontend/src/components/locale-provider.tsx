@@ -11,10 +11,10 @@ const LOCALE_STORAGE_KEY = "PARAGLIDE_LOCALE";
  * stored value directly via Paraglide's strategy chain — no re-render needed
  * because `m.*()` calls read the live locale on each invocation.
  *
- * The first paint after `localStorage.setItem` still uses `baseLocale` (en)
+ * The first paint after `localStorage.setItem` still uses `baseLocale` (pl)
  * because Paraglide's getter cached the value before the seed. We trigger a
- * single reload so Polish-browser users see Polish from the second paint on.
- * After that, the seed sticks and there's no reload churn.
+ * single reload so English-browser users see English from the second paint on.
+ * Polish-browser users (the common case) skip the reload entirely.
  */
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const hasReloaded = useRef(false);
@@ -26,7 +26,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     if (stored) return;
     const initial = detectInitialLocale();
     window.localStorage.setItem(LOCALE_STORAGE_KEY, initial);
-    if (initial !== "en") {
+    if (initial !== "pl") {
       hasReloaded.current = true;
       window.location.reload();
     }
