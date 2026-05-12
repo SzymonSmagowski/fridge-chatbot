@@ -307,6 +307,7 @@
   "settings_cars_card_title": "Auta",
   "settings_cars_subtitle": "Wspólne auta — można je przypisywać do wydarzeń i notatek.",
   "settings_add_car_button": "Dodaj auto",
+  "settings_active_count_pill": "aktywne: {count}",
   "settings_prefs_card_title": "Ustawienia",
   "settings_prefs_subtitle": "Zachowanie lodówki. Zmiany działają od razu.",
   "settings_loading_prefs": "Wczytuję ustawienia…",

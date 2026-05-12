@@ -138,41 +138,40 @@ function MemberForm({
         </div>
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>Google Calendar</label>
-        {googleStatus === "connected" ? (
-          <div
-            style={{
-              padding: "10px 12px",
-              background: "var(--surface-raised)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "var(--fridge-radius)",
-              fontSize: 14,
-              color: "var(--muted-fg)",
-            }}
-          >
-            Connected as {editing?.google.email ?? "Google account"}.
-          </div>
-        ) : (
-          <>
-            <button
-              type="button"
-              className={styles.btn}
-              style={{ width: "fit-content" }}
-              onClick={connectGoogle}
-              disabled={!editing}
+      {editing ? (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Google Calendar</label>
+          {googleStatus === "connected" ? (
+            <div
+              style={{
+                padding: "10px 12px",
+                background: "var(--surface-raised)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "var(--fridge-radius)",
+                fontSize: 14,
+                color: "var(--muted-fg)",
+              }}
             >
-              <LogIn size={16} strokeWidth={2.4} />
-              Connect Google
-            </button>
-            <div style={{ fontSize: 13, color: "var(--muted-fg)", marginTop: 6 }}>
-              {editing
-                ? "Skip for now — you can connect later from this member's row."
-                : "Save the member first, then connect Google."}
+              Connected as {editing.google.email ?? "Google account"}.
             </div>
-          </>
-        )}
-      </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={styles.btn}
+                style={{ width: "fit-content" }}
+                onClick={connectGoogle}
+              >
+                <LogIn size={16} strokeWidth={2.4} />
+                Connect Google
+              </button>
+              <div style={{ fontSize: 13, color: "var(--muted-fg)", marginTop: 6 }}>
+                Skip for now — you can connect later from this member&apos;s row.
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: "auto", paddingTop: 12 }}>
         <button

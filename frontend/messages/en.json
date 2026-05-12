@@ -299,6 +299,7 @@
   "settings_cars_card_title": "Cars",
   "settings_cars_subtitle": "Shared vehicles — assignable to events and notes.",
   "settings_add_car_button": "Add a car",
+  "settings_active_count_pill": "{count} active",
   "settings_prefs_card_title": "Preferences",
   "settings_prefs_subtitle": "Fridge-level behavior. Changes apply immediately.",
   "settings_loading_prefs": "Loading preferences…",

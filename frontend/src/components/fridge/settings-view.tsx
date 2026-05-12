@@ -316,12 +316,12 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <div className={styles.settingsCard}>
               <h3>
-                Cars
+                {m.settings_cars_card_title()}
                 <span className={`${styles.pill} ${styles.pillNeutral}`}>
-                  {activeCars.length} active
+                  {m.settings_active_count_pill({ count: activeCars.length })}
                 </span>
               </h3>
-              <div className={styles.sub}>Shared vehicles — assignable to events and notes.</div>
+              <div className={styles.sub}>{m.settings_cars_subtitle()}</div>
 
               <div className={styles.memberList}>
                 {activeCars.map((c) => (
@@ -341,22 +341,20 @@ export function SettingsView({ family, members, cars, refresh }: SettingsViewPro
                 onClick={() => setCarSheet({ mode: "create" })}
               >
                 <Plus size={18} strokeWidth={2.4} />
-                Add a car
+                {m.settings_add_car_button()}
               </button>
             </div>
 
             <div className={styles.settingsCard}>
-              <h3>Preferences</h3>
-              <div className={styles.sub}>
-                Fridge-level behavior. Changes apply immediately.
-              </div>
+              <h3>{m.settings_prefs_card_title()}</h3>
+              <div className={styles.sub}>{m.settings_prefs_subtitle()}</div>
 
               {prefsError ? (
                 <ErrorBanner message={prefsError} onRetry={() => void fetchPrefs()} />
               ) : prefs ? (
                 <PreferencesPanel prefs={prefs} onChange={updatePrefs} />
               ) : (
-                <div style={{ color: "var(--muted-fg)" }}>Loading preferences…</div>
+                <div style={{ color: "var(--muted-fg)" }}>{m.settings_loading_prefs()}</div>
               )}
             </div>
 
@@ -552,7 +550,7 @@ function CarRow({
         <button
           type="button"
           className={styles.iconBtn}
-          aria-label={`Edit ${car.name}`}
+          aria-label={m.settings_car_edit_aria({ name: car.name })}
           onClick={onEdit}
         >
           <Pencil size={16} strokeWidth={2} />
@@ -560,7 +558,7 @@ function CarRow({
         <button
           type="button"
           className={styles.iconBtn}
-          aria-label={`More actions for ${car.name}`}
+          aria-label={m.settings_car_more_aria({ name: car.name })}
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((v) => !v)}
         >
@@ -592,7 +590,7 @@ function CarRow({
                 onSetInactive();
               }}
             >
-              Set inactive
+              {m.settings_car_set_inactive()}
             </button>
             <button
               role="menuitem"
@@ -604,7 +602,7 @@ function CarRow({
                 onDelete();
               }}
             >
-              Delete permanently
+              {m.settings_car_delete_permanently()}
             </button>
           </div>
         ) : null}
@@ -625,48 +623,42 @@ function PreferencesPanel({
     <div>
       <div className={styles.prefRow}>
         <div className={styles.prefLabel}>
-          <div className="lt">Calendar sync interval</div>
-          <div className="ls">How often to poll Google Calendar.</div>
+          <div className="lt">{m.prefs_sync_interval_label()}</div>
+          <div className="ls">{m.prefs_sync_interval_sub()}</div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          {([1, 5, 15] as const).map((m) => (
+          {([1, 5, 15] as const).map((mins) => (
             <button
-              key={m}
+              key={mins}
               type="button"
-              onClick={() => void onChange({ sync_interval_sec: m * 60 })}
+              onClick={() => void onChange({ sync_interval_sec: mins * 60 })}
               className={`${styles.btn} ${styles.btnSmall} ${
-                intervalMinutes === m ? styles.btnPrimary : styles.btnGhost
+                intervalMinutes === mins ? styles.btnPrimary : styles.btnGhost
               }`}
-              aria-pressed={intervalMinutes === m}
+              aria-pressed={intervalMinutes === mins}
             >
-              {m}m
+              {m.prefs_sync_minutes({ count: mins })}
             </button>
           ))}
         </div>
       </div>
 
       <PrefToggleRow
-        title="Fan-out family events"
-        sub="Unassigned events push to every connected member."
+        title={m.prefs_fanout_label()}
+        sub={m.prefs_fanout_sub()}
         value={prefs.fanout_enabled}
         onChange={(v) => void onChange({ fanout_enabled: v })}
       />
       <PrefToggleRow
-        title="Auto-create shopping list"
-        sub="Seed a pinned shopping list for new families."
-        value={prefs.auto_create_shopping_list}
-        onChange={(v) => void onChange({ auto_create_shopping_list: v })}
-      />
-      <PrefToggleRow
-        title="Voice wake phrase"
-        sub='"Hey Jarvis" passive listener — currently always on; toggle is a UI hook for a follow-up.'
+        title={m.prefs_voice_wake_label()}
+        sub={m.prefs_voice_wake_sub()}
         value={prefs.voice_wake_enabled}
         onChange={(v) => void onChange({ voice_wake_enabled: v })}
         disabled
       />
       <PrefToggleRow
-        title="Always-on display"
-        sub="Never sleep — screen stays lit 24/7."
+        title={m.prefs_always_on_label()}
+        sub={m.prefs_always_on_sub()}
         value={prefs.always_on}
         onChange={(v) => void onChange({ always_on: v })}
       />
