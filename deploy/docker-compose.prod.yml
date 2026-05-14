@@ -213,6 +213,62 @@ services:
         psql -h postgres -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE fridge_chatbot TO fridge_chatbot"
         echo "postgres-init: OK"
 
+  # ----- Postgres pg_dumpall → GCS bucket (every 3h) ------------------------
+  # Streams a compressed dump of EVERY database to gs://${BACKUP_BUCKET} via
+  # the VM runtime SA's metadata-server identity. No JSON keys. The bucket
+  # name is deterministic: `${APP_PROJECT}-pg-backups`. The bucket itself,
+  # the 7-day lifecycle, and the SA's storage.objectAdmin grant are managed
+  # by Terraform module `postgres-backup` — see its README for restore steps.
+  #
+  # Cadence: 3 hours. Retention: 7 days (Terraform). Result: ~56 backups,
+  # ~2-5 MB compressed each, ~300 MB total — well inside the GCS free tier.
+  #
+  # Why pg_dumpall, not pg_dump: this Postgres instance holds 4+ DBs
+  # (fridge_chatbot, langfuse, portfolio_ai_lab, dev). pg_dumpall captures
+  # all of them in one file PLUS roles + grants, so a single restore brings
+  # the whole instance back. The `--clean --if-exists` flags make the dump
+  # idempotent for restore against a non-empty target.
+  #
+  # The container does an immediate dump on startup so the operator gets
+  # same-day confirmation that the bucket + IAM + dump pipeline all work,
+  # instead of waiting 3 hours for the first cycle.
+  postgres-backup:
+    image: google/cloud-sdk:slim
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [apartment]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      BACKUP_BUCKET: ${BACKUP_BUCKET}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        echo "[pg-backup] installing postgresql-client..."
+        apt-get update -qq && apt-get install -y --no-install-recommends postgresql-client >/dev/null
+        echo "[pg-backup] ready — target: gs://$$BACKUP_BUCKET, cadence: every 3h"
+        dump_once() {
+          stamp=$$(date -u +%Y-%m-%dT%H-%M-%SZ)
+          object="$$stamp.sql.gz"
+          echo "[pg-backup] dumping all DBs → gs://$$BACKUP_BUCKET/$$object"
+          if pg_dumpall --clean --if-exists | gzip | gsutil -q cp - "gs://$$BACKUP_BUCKET/$$object"; then
+            echo "[pg-backup] ok — $$object"
+          else
+            echo "[pg-backup] FAILED — will retry in 3h" >&2
+          fi
+        }
+        # First dump now so deploys get fast confirmation; then loop every 3h.
+        dump_once
+        while true; do
+          sleep 10800
+          dump_once
+        done
+
   # ----- Redis + per-app ACL ------------------------------------------------
   # Host port 6379 exposed for operator redis-cli / RedisInsight. Same firewall
   # contract as Postgres above — reachable only from `operator_whitelist_ips`.
