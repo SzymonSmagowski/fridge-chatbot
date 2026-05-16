@@ -130,6 +130,13 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
         sudo -E ./fetch-secrets.sh
         sudo docker compose -f docker-compose.prod.yml --env-file .env pull
         sudo docker compose -f docker-compose.prod.yml --env-file .env up -d
+        # Reload Caddy in place. \`docker compose up -d\` doesn't restart a
+        # container when only its mounted file (Caddyfile) has changed — the
+        # compose service definition is unchanged so docker keeps the old
+        # in-memory parsed config. Without this reload, edits to Caddyfile
+        # (new hostnames, redirect targets, TLS options) silently never take
+        # effect. SIGUSR1-equivalent reload — no dropped connections.
+        sudo docker compose -f docker-compose.prod.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile
         # One-shot, idempotent: rename the legacy 'prodorg' Langfuse org to
         # the per-app 'fridge-chatbot' org. No-op on subsequent re-deploys.
         sudo ./provision-langfuse-org.sh
@@ -144,7 +151,14 @@ VM_IP=$(gcloud compute instances describe "$VM_NAME" \
     --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
     --format='value(networkInterfaces[0].accessConfigs[0].natIP)')
 echo
-echo "Deployed: http://${VM_IP}/"
-echo "Tag: ${TAG}"
-echo "Backend image: ${BACKEND_IMG}"
+echo "Deployed:"
+echo "  https://fridge-chatbot.smagowskiai.dev/   (public app)"
+echo "  https://langfuse.smagowskiai.dev/         (operator UI)"
+echo "VM IP:    ${VM_IP}"
+echo "Tag:      ${TAG}"
+echo "Backend image:  ${BACKEND_IMG}"
 echo "Frontend image: ${FRONTEND_IMG}"
+echo
+echo "Smoke test:"
+echo "  curl -fsSI https://fridge-chatbot.smagowskiai.dev/"
+echo "  curl -fsS  https://fridge-chatbot.smagowskiai.dev/health"

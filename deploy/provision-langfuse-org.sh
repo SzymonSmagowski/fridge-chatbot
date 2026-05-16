@@ -186,5 +186,5 @@ WHERE id = '${TARGET_PROJECT_ID}' AND name <> '${TARGET_ORG_NAME}';
 SQL
 
 echo "==> Done."
-echo "    Verify in the UI: https://smagowski-ai-lab-langfuse.duckdns.org"
+echo "    Verify in the UI: https://langfuse.smagowskiai.dev"
 echo "    Admin user: ${ADMIN_EMAIL:-(set ADMIN_EMAIL via fetch-secrets.sh)}"

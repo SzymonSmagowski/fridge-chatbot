@@ -194,9 +194,9 @@ One VM, one `docker-compose`, fifteen containers:
 
 ```mermaid
 flowchart TB
-    subgraph DNS["DuckDNS"]
-        D1[fridge-chatbot.duckdns.org]
-        D2[smagowski-ai-lab-langfuse.duckdns.org]
+    subgraph DNS["Cloudflare DNS · smagowskiai.dev"]
+        D1[fridge-chatbot.smagowskiai.dev]
+        D2[langfuse.smagowskiai.dev]
     end
 
     subgraph VM["Spot VM · GCP free tier"]

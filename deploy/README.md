@@ -5,7 +5,7 @@ Production deployment artifacts for the apartment-building VM. Files:
 | File | Runs where | Role |
 |------|------------|------|
 | `docker-compose.prod.yml` | VM | 13 services: caddy, fridge-backend, fridge-frontend, postgres + init, redis + init, clickhouse, minio + init, langfuse-web, langfuse-worker, livekit-server |
-| `Caddyfile` | VM | Two virtualhosts. `fridge-chatbot.duckdns.org` → backend/frontend/livekit (path-based). `smagowski-ai-lab-langfuse.duckdns.org` → `langfuse-web:3000` (operator UI, self-signup off). |
+| `Caddyfile` | VM | Two virtualhosts. `fridge-chatbot.smagowskiai.dev` → backend/frontend/livekit (path-based). `langfuse.smagowskiai.dev` → `langfuse-web:3000` (operator UI, self-signup off). |
 | `fetch-secrets.sh` | VM | Reads 18 secrets from Secret Manager via the VM's runtime SA + writes `/srv/apps/fridge-chatbot/.env` |
 | `provision-langfuse-org.sh` | VM | One-shot, idempotent: migrates the legacy `prodorg` Langfuse org → per-app `fridge-chatbot` org via direct SQL on the `langfuse` Postgres DB. |
 | `deploy.sh` | **devcontainer** | Build + push images → SCP files to VM → run fetch-secrets → compose up → run provision-langfuse-org |
@@ -33,7 +33,7 @@ If you add a second app (`portfolio` etc.), the cleanest pattern is to extend `p
 
 - Run any psql / redis-cli to create users — the init containers handle it.
 - Add Langfuse organisation/project — on a **fresh VM**, `LANGFUSE_INIT_*` env vars in compose seed the per-app org (`fridge-chatbot`) + project (`fridge-chatbot`) + admin user on first boot using the keys from Secret Manager. On an **existing VM** that was previously seeded under the legacy `prodorg` name, `provision-langfuse-org.sh` migrates it on next deploy (idempotent, runs every deploy, no-ops after the first success).
-- Configure HTTPS certs — Caddy provisions Let's Encrypt certs automatically for every `<host>.duckdns.org` virtualhost the first time it's hit.
+- Configure HTTPS certs — Caddy provisions Let's Encrypt certs automatically for every `<host>.smagowskiai.dev` virtualhost the first time it's hit. DNS is hosted at Cloudflare; records are set to "DNS only" (gray cloud) so HTTP-01 ACME works. See `docs/cloud-engineer-runbook.md` "Pending: operational improvements" for the eventual Cloudflare-proxy + DNS-01 upgrade.
 
 ## What you DO need to do manually
 
@@ -54,7 +54,7 @@ Or via Cloud Logging (Ops Agent ships container stdout):
 
 Open in any browser:
 
-    https://smagowski-ai-lab-langfuse.duckdns.org
+    https://langfuse.smagowskiai.dev
 
 Login: `smagowski.szymon@gmail.com` / (the auto-generated `LANGFUSE_ADMIN_PASSWORD` from `.env` on the VM — read it with `gcloud compute ssh infra-vm --tunnel-through-iap -- 'sudo grep LANGFUSE_ADMIN_PASSWORD /srv/apps/fridge-chatbot/.env'`).
 

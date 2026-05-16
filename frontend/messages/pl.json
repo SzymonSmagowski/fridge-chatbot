@@ -56,6 +56,8 @@
   "pairing_start_button": "Zacznij parowanie",
   "pairing_starting": "Otwieramy Google…",
   "pairing_redirect_hint": "Przekierujemy cię do Google, żeby się zalogować. Potem wrócisz tutaj — sparowany i gotowy.",
+  "pairing_request_access_label": "Nie masz jeszcze dostępu?",
+  "pairing_request_access_hint": "Lodówka jest na zaproszenia. Napisz do właściciela, żeby poprosić o uprawnienia:",
   "pairing_completed": "Gotowe! Zaczynamy.",
   "pairing_error_title": "Nie udało się zacząć parowania.",
   "pairing_error_hint": "Sprawdź sieć i spróbuj jeszcze raz.",

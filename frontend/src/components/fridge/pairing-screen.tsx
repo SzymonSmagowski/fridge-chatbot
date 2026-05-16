@@ -199,6 +199,21 @@ function IdleBody({
       </button>
 
       <p className={pairing.hint}>{m.pairing_redirect_hint()}</p>
+
+      <p className={pairing.hint} style={{ marginTop: 12 }}>
+        <strong>{m.pairing_request_access_label()}</strong>{" "}
+        {m.pairing_request_access_hint()}{" "}
+        <a
+          href="mailto:smagowski.szymon@gmail.com?subject=Fridge%20access%20request"
+          style={{
+            color: "var(--accent)",
+            textDecoration: "underline",
+            textUnderlineOffset: 3,
+          }}
+        >
+          smagowski.szymon@gmail.com
+        </a>
+      </p>
     </>
   );
 }

@@ -54,6 +54,8 @@
   "pairing_start_button": "Start pairing",
   "pairing_starting": "Opening Google…",
   "pairing_redirect_hint": "We'll send you to Google to sign in. After that you'll be back here, paired and ready.",
+  "pairing_request_access_label": "Don't have access yet?",
+  "pairing_request_access_hint": "This fridge is invite-only. Email the owner to request permissions:",
   "pairing_completed": "All set! Welcome.",
   "pairing_error_title": "Couldn't start pairing.",
   "pairing_error_hint": "Check the network and try again.",

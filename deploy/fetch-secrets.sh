@@ -78,8 +78,8 @@ PORTFOLIO_REDIS=$(get "$PORTFOLIO_PROJECT" portfolio-ai-lab-redis-password 2>/de
 # - LANGFUSE_DOMAIN   → the operator-only Langfuse domain (fronted by Caddy).
 # Both get HTTPS automatically (Caddy → Let's Encrypt).
 # Override via env, e.g. LANGFUSE_DOMAIN=other.example.com ./fetch-secrets.sh
-: "${PUBLIC_DOMAIN:=fridge-chatbot.duckdns.org}"
-: "${LANGFUSE_DOMAIN:=smagowski-ai-lab-langfuse.duckdns.org}"
+: "${PUBLIC_DOMAIN:=fridge-chatbot.smagowskiai.dev}"
+: "${LANGFUSE_DOMAIN:=langfuse.smagowskiai.dev}"
 VM_IP=$(curl -fsSL -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip")
 if [[ -n "$PUBLIC_DOMAIN" ]]; then

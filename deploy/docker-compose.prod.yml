@@ -423,7 +423,7 @@ services:
       LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
       LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
-      # Operator policy: web-first access via smagowski-ai-lab-langfuse.duckdns.org.
+      # Operator policy: web-first access via langfuse.smagowskiai.dev.
       # Lock the door — only the seeded admin user (and anyone they invite from
       # inside the UI) can sign in. New visitors cannot self-register.
       AUTH_DISABLE_SIGNUP: "true"

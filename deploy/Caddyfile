@@ -3,18 +3,24 @@
 # ports 80/443 must be reachable from the public internet (they are).
 #
 # Hosts served from this Caddy:
-#   - fridge-chatbot.duckdns.org              → public app (frontend + backend + livekit)
-#   - smagowski-ai-lab-langfuse.duckdns.org   → operator-only Langfuse UI
-#                                                (self-signup disabled, single admin user)
+#   - fridge-chatbot.smagowskiai.dev   → public app (frontend + backend + livekit)
+#   - langfuse.smagowskiai.dev         → operator-only Langfuse UI
+#                                        (self-signup disabled, single admin user)
 #   - imported from /etc/caddy/conf.d/*.caddy — each new app drops its own
 #     host block here (mounted from /srv/apps/<app>/Caddyfile.<app> via the
 #     fridge-chatbot caddy container's volumes). See bottom of file.
 #
-# Operator-access policy: web-first via the dedicated duckdns hostname above.
-# Do NOT propose `gcloud ... -L 3001:langfuse-web:3000` SSH-tunnel access as
-# the default flow — that policy was retired 2026-05-11.
+# DNS is hosted at Cloudflare (registrar + nameservers), records set to
+# "DNS only" (gray cloud) so HTTP-01 ACME challenges work. Upgrading to
+# Cloudflare proxy (orange cloud) requires switching to DNS-01 ACME via
+# the caddy-dns/cloudflare module — see docs/cloud-engineer-runbook.md
+# "Pending: operational improvements".
+#
+# Operator-access policy: web-first via the dedicated langfuse.smagowskiai.dev
+# hostname above. Do NOT propose `gcloud ... -L 3001:langfuse-web:3000`
+# SSH-tunnel access as the default flow — that policy was retired 2026-05-11.
 
-fridge-chatbot.duckdns.org {
+fridge-chatbot.smagowskiai.dev {
     # LiveKit WebSocket signaling — reverse-proxied so clients talk over the
     # canonical HTTPS domain. The LiveKit JS client appends /rtc/v1 to whatever
     # serverUrl it receives from the backend, so the path Caddy strips is the
@@ -42,7 +48,7 @@ fridge-chatbot.duckdns.org {
 # All paths (including the websocket-based /api/auth flow) go to one upstream.
 # Self-signup is disabled inside Langfuse (AUTH_DISABLE_SIGNUP=true in compose);
 # only the admin user seeded by LANGFUSE_INIT_USER_* can sign in.
-smagowski-ai-lab-langfuse.duckdns.org {
+langfuse.smagowskiai.dev {
     reverse_proxy langfuse-web:3000
 
     encode zstd gzip
@@ -57,7 +63,7 @@ smagowski-ai-lab-langfuse.duckdns.org {
 # HTTPS does this for matched hosts, but a request to http://<ip>/ wouldn't
 # otherwise match any block above.
 :80 {
-    redir https://fridge-chatbot.duckdns.org{uri} permanent
+    redir https://fridge-chatbot.smagowskiai.dev{uri} permanent
 }
 
 # ---- Per-app host blocks (one file per app, dropped in conf.d) -------------
