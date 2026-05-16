@@ -87,7 +87,7 @@ echo "==> Copy compose/Caddyfile/fetch-secrets.sh to VM"
 gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
     --tunnel-through-iap --quiet \
     --command='set -e
-        sudo mkdir -p /srv/apps/fridge-chatbot
+        sudo mkdir -p /srv/apps/fridge-chatbot /srv/apps/portfolio-ai-lab
         sudo touch \
             /srv/apps/fridge-chatbot/docker-compose.prod.yml \
             /srv/apps/fridge-chatbot/Caddyfile \
@@ -99,6 +99,12 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
             /srv/apps/fridge-chatbot/Caddyfile \
             /srv/apps/fridge-chatbot/fetch-secrets.sh \
             /srv/apps/fridge-chatbot/provision-langfuse-org.sh
+        # The fridge caddy container bind-mounts /srv/apps/portfolio-ai-lab/Caddyfile.portfolio
+        # as conf.d/portfolio-ai-lab.caddy. Docker errors out if the source
+        # path does not exist; pre-touch it so a fridge-only deploy (before
+        # portfolio has ever been deployed) does not crash the caddy service.
+        # If portfolio deploys later it overwrites this file with the real one.
+        sudo touch /srv/apps/portfolio-ai-lab/Caddyfile.portfolio
     '
 
 gcloud compute scp --tunnel-through-iap \
@@ -127,6 +133,10 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --project="$INFRA_PROJECT" \
         # One-shot, idempotent: rename the legacy 'prodorg' Langfuse org to
         # the per-app 'fridge-chatbot' org. No-op on subsequent re-deploys.
         sudo ./provision-langfuse-org.sh
+        # Reclaim disk: drop images >24h old not referenced by any container.
+        # 24h keeps yesterday's tag around for quick rollback (docker tag SHA :latest).
+        # Without this, accumulated SHA-tagged images filled the 30GB boot disk.
+        sudo docker image prune -af --filter 'until=24h'
     "
 
 # --- 6. Report public URL ----------------------------------------------------

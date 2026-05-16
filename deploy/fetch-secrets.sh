@@ -17,6 +17,11 @@ readonly INFRA_PROJECT="ai-lab-493821"
 readonly APP_PROJECT="ai-lab-fridge-chatbot"
 readonly ENV_FILE="/srv/apps/fridge-chatbot/.env"
 readonly DEPLOY_DIR="/srv/apps/fridge-chatbot"
+# Cross-app secret IDs needed by SHARED init containers (postgres-init creates
+# the portfolio_ai_lab role/db; redis-init creates the portfolio-ai-lab ACL
+# user). The values land in fridge's .env so the shared init containers can
+# see them — no other fridge-chatbot service references PORTFOLIO_*.
+readonly PORTFOLIO_PROJECT="ai-lab-portfolio"
 
 # Re-exec under sudo if not root (so /srv/apps writes succeed). Remember the
 # caller's identity so we can hand the resulting .env back to them — IAP SSH
@@ -61,6 +66,12 @@ FRIDGE_LF_PUB=$(get "$APP_PROJECT" fridge-chatbot-langfuse-public-key)
 FRIDGE_LF_SEC=$(get "$APP_PROJECT" fridge-chatbot-langfuse-secret-key)
 FRIDGE_OAUTH_ID=$(get "$APP_PROJECT" fridge-chatbot-oauth-client-id)
 FRIDGE_OAUTH_SECRET=$(get "$APP_PROJECT" fridge-chatbot-oauth-client-secret)
+
+# Cross-app secrets the SHARED init containers need (see header comment).
+# `|| true` lets the fridge-only deploy succeed even before portfolio's
+# project + secrets exist — postgres-init/redis-init handle the empty case.
+PORTFOLIO_DB=$(get "$PORTFOLIO_PROJECT" portfolio-ai-lab-db-password 2>/dev/null || echo "")
+PORTFOLIO_REDIS=$(get "$PORTFOLIO_PROJECT" portfolio-ai-lab-redis-password 2>/dev/null || echo "")
 
 # Public base URLs.
 # - PUBLIC_DOMAIN     → the user-facing fridge-chatbot app domain.
@@ -133,6 +144,14 @@ FRIDGE_LANGFUSE_PUBLIC_KEY=${FRIDGE_LF_PUB}
 FRIDGE_LANGFUSE_SECRET_KEY=${FRIDGE_LF_SEC}
 FRIDGE_GOOGLE_CLIENT_ID=${FRIDGE_OAUTH_ID}
 FRIDGE_GOOGLE_CLIENT_SECRET=${FRIDGE_OAUTH_SECRET}
+
+# --- cross-app: portfolio-ai-lab role/db/acl provisioning -------------------
+# Consumed only by the SHARED postgres-init + redis-init containers.
+# Empty until the operator has applied portfolio's terraform + seeded the
+# secret values; the init containers `provision_app` helper short-circuits
+# on empty and moves on.
+PORTFOLIO_DB_PASSWORD=${PORTFOLIO_DB}
+PORTFOLIO_REDIS_PASSWORD=${PORTFOLIO_REDIS}
 EOF
 
 chmod 600 "$ENV_FILE"

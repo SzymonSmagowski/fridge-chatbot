@@ -6,6 +6,9 @@
 #   - fridge-chatbot.duckdns.org              → public app (frontend + backend + livekit)
 #   - smagowski-ai-lab-langfuse.duckdns.org   → operator-only Langfuse UI
 #                                                (self-signup disabled, single admin user)
+#   - imported from /etc/caddy/conf.d/*.caddy — each new app drops its own
+#     host block here (mounted from /srv/apps/<app>/Caddyfile.<app> via the
+#     fridge-chatbot caddy container's volumes). See bottom of file.
 #
 # Operator-access policy: web-first via the dedicated duckdns hostname above.
 # Do NOT propose `gcloud ... -L 3001:langfuse-web:3000` SSH-tunnel access as
@@ -56,3 +59,10 @@ smagowski-ai-lab-langfuse.duckdns.org {
 :80 {
     redir https://fridge-chatbot.duckdns.org{uri} permanent
 }
+
+# ---- Per-app host blocks (one file per app, dropped in conf.d) -------------
+# Each new app on the apartment VM contributes its own host block under
+# /etc/caddy/conf.d/<app>.caddy. The mount is configured per-app in this
+# compose: `caddy.volumes += /srv/apps/<app>/Caddyfile.<app>:/etc/caddy/conf.d/<app>.caddy:ro`.
+# Caddy reloads via SIGUSR1 inside the container; deploy.sh handles that.
+import /etc/caddy/conf.d/*.caddy

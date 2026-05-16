@@ -25,6 +25,11 @@ x-logging: &default-logging
 services:
 
   # ----- Reverse proxy -------------------------------------------------------
+  # Apartment-wide. Each app contributes ONE host block under conf.d/, loaded
+  # via the `import /etc/caddy/conf.d/*.caddy` directive at the bottom of the
+  # main Caddyfile. The mount below pulls each app's block from
+  # /srv/apps/<app>/Caddyfile.<app> on the host — pre-deploy is responsible
+  # for making sure the file exists (a `touch` in deploy.sh is enough).
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -34,6 +39,7 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /srv/apps/portfolio-ai-lab/Caddyfile.portfolio:/etc/caddy/conf.d/portfolio-ai-lab.caddy:ro
       - ./data/caddy/data:/data
       - ./data/caddy/config:/config
     networks: [apartment]
@@ -179,6 +185,8 @@ services:
       retries: 20
 
   # One-shot. Idempotent. Creates per-app + langfuse DBs/users.
+  # When a new app moves in, append its (role, db, password env var) triple
+  # to the loop below — no separate init container per app.
   postgres-init:
     image: postgres:16-alpine
     restart: "no"
@@ -188,6 +196,12 @@ services:
     environment:
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
       FRIDGE_DB_PASSWORD: ${FRIDGE_DB_PASSWORD}
+      # Portfolio-ai-lab joined 2026-05-16. Empty string is treated as
+      # "skip this app" — keeps the init forward-compatible if the operator
+      # hasn't yet populated /srv/apps/portfolio-ai-lab/.env before the
+      # first fridge deploy. The portfolio deploy.sh sources its own .env
+      # and re-runs `docker compose up -d postgres-init` to fill the slot.
+      PORTFOLIO_DB_PASSWORD: ${PORTFOLIO_DB_PASSWORD:-}
     # Why: psql's `-c` flag sends SQL verbatim WITHOUT variable substitution
     # (per psql docs). `:'pw'` only expands when SQL is read from stdin/-f,
     # not -c. Solution: pipe SQL via heredoc + psql's `:'name'` substitution.
@@ -197,20 +211,34 @@ services:
       - -c
       - |
         set -e
+        # Langfuse system DB (no app role; Langfuse uses the postgres admin user).
         psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='langfuse'" | grep -q 1 \
           || psql -h postgres -U postgres -c "CREATE DATABASE langfuse"
-        if psql -h postgres -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='fridge_chatbot'" | grep -q 1; then
-          psql -h postgres -U postgres -v pw="$$FRIDGE_DB_PASSWORD" <<'SQL'
-        ALTER ROLE fridge_chatbot WITH LOGIN PASSWORD :'pw';
+
+        # Per-app provisioner. Args: <role> <db> <password>. Idempotent on all three.
+        provision_app() {
+            role="$$1"; db="$$2"; pw="$$3"
+            if [ -z "$$pw" ]; then
+                echo "postgres-init: skipping $$role (no password in env)"
+                return
+            fi
+            if psql -h postgres -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$$role'" | grep -q 1; then
+                psql -h postgres -U postgres -v pw="$$pw" <<SQL
+        ALTER ROLE "$$role" WITH LOGIN PASSWORD :'pw';
         SQL
-        else
-          psql -h postgres -U postgres -v pw="$$FRIDGE_DB_PASSWORD" <<'SQL'
-        CREATE ROLE fridge_chatbot WITH LOGIN PASSWORD :'pw';
+            else
+                psql -h postgres -U postgres -v pw="$$pw" <<SQL
+        CREATE ROLE "$$role" WITH LOGIN PASSWORD :'pw';
         SQL
-        fi
-        psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='fridge_chatbot'" | grep -q 1 \
-          || psql -h postgres -U postgres -c "CREATE DATABASE fridge_chatbot OWNER fridge_chatbot"
-        psql -h postgres -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE fridge_chatbot TO fridge_chatbot"
+            fi
+            psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='$$db'" | grep -q 1 \
+              || psql -h postgres -U postgres -c "CREATE DATABASE \"$$db\" OWNER \"$$role\""
+            psql -h postgres -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE \"$$db\" TO \"$$role\""
+            echo "postgres-init: provisioned $$role / $$db"
+        }
+
+        provision_app fridge_chatbot    fridge_chatbot    "$$FRIDGE_DB_PASSWORD"
+        provision_app portfolio_ai_lab  portfolio_ai_lab  "$$PORTFOLIO_DB_PASSWORD"
         echo "postgres-init: OK"
 
   # NOTE: The postgres-backup sidecar (pg_dumpall → GCS, every 3h)
@@ -245,13 +273,18 @@ services:
       timeout: 3s
       retries: 20
 
-  # One-shot. Adds the fridge-chatbot ACL user with ~fridge-chatbot:* keyspace isolation.
+  # One-shot. Adds per-app ACL users. Idempotent (ACL SETUSER overwrites).
   redis-init:
     image: redis:7-alpine
     restart: "no"
     networks: [apartment]
     depends_on:
       redis: { condition: service_healthy }
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      FRIDGE_REDIS_PASSWORD: ${FRIDGE_REDIS_PASSWORD}
+      # See PORTFOLIO_DB_PASSWORD note on postgres-init for the empty-default rationale.
+      PORTFOLIO_REDIS_PASSWORD: ${PORTFOLIO_REDIS_PASSWORD:-}
     entrypoint:
       - /bin/sh
       - -c
@@ -264,10 +297,22 @@ services:
         # (pub/sub channels, OAuth state in `oauth_state:...`) also doesn't
         # namespace under the app slug. Until we wire end-to-end key
         # prefixing into the backend code, the per-app ACL must be wide.
-        # Multi-app isolation will need to revisit this.
-        redis-cli -h redis -a "${REDIS_PASSWORD}" --no-auth-warning ACL SETUSER fridge-chatbot \
-          on ">${FRIDGE_REDIS_PASSWORD}" "~*" "&*" "+@all"
-        redis-cli -h redis -a "${REDIS_PASSWORD}" --no-auth-warning ACL SAVE
+        # Multi-app isolation will need to revisit this. Portfolio-ai-lab's
+        # Redis usage is currently empty, but the ACL user is provisioned so
+        # caching/rate-limiting can land later without a second redis-init pass.
+        provision_user() {
+            user="$$1"; pw="$$2"
+            if [ -z "$$pw" ]; then
+                echo "redis-init: skipping $$user (no password in env)"
+                return
+            fi
+            redis-cli -h redis -a "$$REDIS_PASSWORD" --no-auth-warning ACL SETUSER "$$user" \
+                on ">$$pw" "~*" "&*" "+@all"
+            echo "redis-init: provisioned $$user"
+        }
+        provision_user fridge-chatbot    "$$FRIDGE_REDIS_PASSWORD"
+        provision_user portfolio-ai-lab  "$$PORTFOLIO_REDIS_PASSWORD"
+        redis-cli -h redis -a "$$REDIS_PASSWORD" --no-auth-warning ACL SAVE
         echo "redis-init: OK"
 
   # ----- Langfuse stack (clickhouse + minio + web + worker) ------------------
