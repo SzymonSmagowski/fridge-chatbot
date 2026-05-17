@@ -34,7 +34,10 @@ class Settings(BaseSettings):
     # Encryption (Fernet) — used to encrypt Google refresh tokens at rest.
     # MUST be a urlsafe base64-encoded 32-byte key. Generate with:
     #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    FERNET_KEY: str = "v3wPLJTw45A9mE_b6mIwS5zmpxwPF-43bp9xL9qsQT4="
+    # Required in ENVIRONMENT=prod (the startup guard refuses to boot when
+    # empty). In dev, leave blank and `ensure_dev_fernet_key` in
+    # `core/startup_guards.py` auto-generates an ephemeral one on startup.
+    FERNET_KEY: str = ""
 
     # JWT
     SECRET_KEY: str = "changeme-use-a-long-random-string"

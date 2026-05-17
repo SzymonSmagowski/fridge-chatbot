@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 import jwt
 import pytest
 import pytest_asyncio
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import create_engine, text
@@ -38,7 +39,7 @@ os.environ.setdefault(
     "SECRET_KEY",
     "test-secret-key-for-pytest-must-be-at-least-32-bytes-long",
 )
-os.environ.setdefault("FERNET_KEY", "v3wPLJTw45A9mE_b6mIwS5zmpxwPF-43bp9xL9qsQT4=")
+os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode())
 os.environ.setdefault("OPENAI_API_KEY", "")  # disables LLM init paths
 
 from src.core.settings import Settings  # noqa: E402

@@ -1,23 +1,30 @@
-"""Startup safety guards (D3, D4, D5).
+"""Startup safety guards.
 
-Refuses to boot in production when contributor-friendly defaults are still in
-place. Called from `main.lifespan` after settings load and before alembic runs.
+Two responsibilities, both called from `main.lifespan` after settings load
+and before alembic runs.
 
-Why this exists, in three lines:
-- `.env.example` ships the published default Fernet key + a placeholder JWT
-  signing key so contributors can `cp .env.example .env && ./run.sh` and have
-  a working dev DB. Those defaults are public, so they MUST NOT reach prod.
-- ALLOWED_ORIGINS in dev includes `http://localhost:*` for the Next.js dev
-  server. Leaving that in prod means any malicious site running on a localhost
-  port can read browser-credentialed responses if it tricks the browser into
-  thinking it's the kiosk frontend.
-- Both checks gate on `ENVIRONMENT == 'prod'`. In dev (the default) they no-op.
+- `validate_production_secrets` — refuse to boot in `ENVIRONMENT=prod` when
+  contributor-friendly placeholders are still in place. SECRET_KEY must not
+  be a known placeholder, FERNET_KEY must be set, ALLOWED_ORIGINS must not
+  contain localhost/127.0.0.1. No-op in dev.
+
+- `ensure_dev_fernet_key` — if FERNET_KEY is empty AND we're in dev, generate
+  an ephemeral Fernet key and mutate settings in place. Logs the value so
+  the contributor can copy it into their `.env` if they want persistence.
+  Lets `cp .env.example .env && ./run.sh` work end-to-end without a manual
+  key-generation step, while keeping zero Fernet-shaped strings in source
+  (so secret scanners stay quiet on a public repo).
 """
 from __future__ import annotations
 
+import logging
+
+from cryptography.fernet import Fernet
+
 from src.core.settings import Settings
 
-PUBLISHED_DEFAULT_FERNET_KEY = "v3wPLJTw45A9mE_b6mIwS5zmpxwPF-43bp9xL9qsQT4="
+logger = logging.getLogger(__name__)
+
 PUBLISHED_DEFAULT_SECRET_KEYS = {
     "changeme",
     "changeme-use-a-long-random-string",
@@ -25,7 +32,7 @@ PUBLISHED_DEFAULT_SECRET_KEYS = {
 
 
 def validate_production_secrets(settings: Settings) -> None:
-    """Refuse to boot in prod if any published default is still in place.
+    """Refuse to boot in prod if any contributor-friendly placeholder is still in place.
 
     No-op when ENVIRONMENT != 'prod'. Raises RuntimeError with an actionable
     message otherwise — the lifespan lets it propagate so uvicorn exits.
@@ -35,14 +42,14 @@ def validate_production_secrets(settings: Settings) -> None:
 
     if settings.SECRET_KEY in PUBLISHED_DEFAULT_SECRET_KEYS:
         raise RuntimeError(
-            "SECRET_KEY is a published default; refusing to boot in prod. "
+            "SECRET_KEY is a published placeholder; refusing to boot in prod. "
             "Generate a new one with: "
             'python -c "import secrets; print(secrets.token_urlsafe(64))"'
         )
 
-    if settings.FERNET_KEY == PUBLISHED_DEFAULT_FERNET_KEY:
+    if not settings.FERNET_KEY:
         raise RuntimeError(
-            "FERNET_KEY is the published default; refusing to boot in prod. "
+            "FERNET_KEY is not set; refusing to boot in prod. "
             "Generate a new one with: "
             'python -c "from cryptography.fernet import Fernet; '
             'print(Fernet.generate_key().decode())"'
@@ -58,3 +65,28 @@ def validate_production_secrets(settings: Settings) -> None:
             "Refusing to start in prod with localhost in ALLOWED_ORIGINS: "
             f"{bad_origins!r}. Update ALLOWED_ORIGINS to the deployed origins only."
         )
+
+
+def ensure_dev_fernet_key(settings: Settings) -> None:
+    """Generate an ephemeral Fernet key in dev if none was provided.
+
+    Mutates `settings.FERNET_KEY` in place. No-op when:
+    - ENVIRONMENT == 'prod' (the production requirement is enforced by
+      `validate_production_secrets`, which runs first and would have already
+      raised if FERNET_KEY were empty)
+    - FERNET_KEY is already set
+    """
+    if settings.ENVIRONMENT == "prod":
+        return
+    if settings.FERNET_KEY:
+        return
+
+    key = Fernet.generate_key().decode("utf-8")
+    settings.FERNET_KEY = key
+    logger.warning(
+        "FERNET_KEY is not set — generated an ephemeral key for this run. "
+        "Google OAuth refresh tokens encrypted with this key will become "
+        "undecryptable on restart. To make it persistent, add this line to "
+        "backend/.env: FERNET_KEY=%s",
+        key,
+    )
