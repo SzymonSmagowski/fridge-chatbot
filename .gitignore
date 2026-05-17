@@ -1,0 +1,33 @@
+# Root-level catch-all. Each subpackage (backend/, frontend/) has its own
+# .gitignore covering language-specific build artifacts and .env handling.
+# This file is intentionally minimal — only repo-wide OS / IDE / editor junk.
+
+# macOS Finder metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux trash files
+*~
+.fuse_hidden*
+.Trash-*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+.project
+.settings/
+
+# Logs at the repo root (sub-packages handle their own)
+*.log
+
+# Anything mounted into a local Postgres/Redis bind volume
+/data/

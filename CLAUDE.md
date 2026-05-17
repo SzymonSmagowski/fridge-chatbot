@@ -1,6 +1,8 @@
 # fridge-chatbot
 
-A shared-appliance kiosk chatbot for household management. Members are assignees and scope boundaries, never login identities. No per-user auth — a family is the top-level tenant. This app is the worked example for the autonomous pipeline; its architecture is the baseline for future Python/Next.js projects in the monorepo.
+A shared-appliance kiosk chatbot for household management. Members are assignees and scope boundaries, never login identities. No per-user auth — a family is the top-level tenant.
+
+**Parent project:** This repo is the worked example produced by the autonomous-development pipeline in [Claude-Code-Skills](https://github.com/SzymonSmagowski/Claude-Code-Skills). The architecture and conventions here are the baseline template that monorepo's other apps build on; infrastructure modules that provision this app live in `terraform/fridge-chatbot/` over there.
 
 ## Subdirectories
 

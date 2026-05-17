@@ -139,7 +139,7 @@ flowchart LR
 
 ## Run it locally
 
-You need Python 3.11+ with Poetry, Node.js 24 with pnpm (via Corepack), Postgres 16, and Redis 7. The repo's `.devcontainer/` provisions all of this — open in VS Code / GitHub Codespaces and skip to step 3.
+You need Python 3.11+ with Poetry, Node.js 24 with pnpm (via Corepack), Postgres 16, and Redis 7. The **parent monorepo** ([Claude-Code-Skills](https://github.com/SzymonSmagowski/Claude-Code-Skills)) ships a `.devcontainer/` that provisions all of this — clone both repos side-by-side (`Claude-Code-Skills/apps/fridge-chatbot/`) and open the parent in VS Code / GitHub Codespaces to skip to step 3. Standalone, you'll need to provision Postgres + Redis yourself.
 
 ```bash
 # 1. Backend env
@@ -272,6 +272,12 @@ dev.sh          # start backend + frontend + voice worker together
 
 ---
 
+## Built alongside
+
+This repository is one of two products of the **[Claude-Code-Skills](https://github.com/SzymonSmagowski/Claude-Code-Skills)** monorepo — an autonomous-development pipeline where ten specialized Claude agents (Designer → Architect → CloudEngineer → FrontendDeveloper ∥ BackendDeveloper ∥ AIEngineer → FrontendTester ∥ BackendTester → Documentator → Evaluator) build features end-to-end from a natural-language description. fridge-chatbot is the **worked example** that pipeline produced: the architecture and conventions here are the baseline template the other apps in that monorepo build on.
+
+The parent repo also owns the GCP infrastructure module (`terraform/fridge-chatbot/`) that provisions this app's per-app Secret Manager, Artifact Registry, and firewall rules. To deploy a fresh copy of fridge-chatbot you need both repos.
+
 ## License
 
-[Add your license here]
+[MIT](LICENSE) © 2026 Szymon Smagowski
