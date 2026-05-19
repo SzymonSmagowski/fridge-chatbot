@@ -16,10 +16,11 @@ The VM keeps each app's deploy artifacts **and** its Docker bind-mount data unde
 ├── provision-langfuse-org.sh    ← scp target
 ├── .env                         ← created by fetch-secrets.sh on the VM
 └── data/                        ← Docker bind-mount root
-    ├── postgres/                ← owned by UID 70  (alpine postgres user)
-    ├── redis/                   ← owned by UID 999
+    ├── postgres/                ← owned by UID 70  (alpine postgres user, mode 0700)
+    ├── redis/                   ← owned by UID 999  (mode 0700)
     ├── clickhouse/              ← owned by UID 101
-    ├── minio/                   ← owned by UID 1000
+    ├── clickhouse-logs/         ← owned by UID 101
+    ├── minio/                   ← owned by UID 1001 (compose pins `user: "1001:1001"`)
     └── caddy/                   ← owned by root
 ```
 
@@ -32,6 +33,10 @@ The VM keeps each app's deploy artifacts **and** its Docker bind-mount data unde
 ### Origin
 
 Incident 2026-05-12: a recursive chown during a deploy retry bricked Postgres in production for ~5 min. Recovery commands above. The deploy.sh comment block at the chown step retains the same warning inline.
+
+Incident 2026-05-19: a *different* recursive chown — `chown -R ubuntu:ubuntu /srv/apps` in the VM startup script — fired on every boot, drifting data-dir ownership away from container uids. Latent since day one; surfaced after a Spot preemption broke metadata in a way that exposed the Postgres `pg_filenode.map` perm check. Permanent fix: replaced the blind chown with a templated per-volume loop (`volume_owners` variable in `terraform/variables.tf` of the parent monorepo). Same boot now re-asserts the canonical uid + mode (postgres + redis: 0700) on every restart, including post-preemption.
+
+In the same incident the postgres healthcheck (`pg_isready`) was found to lie — it reported "healthy" while every real query died on the permission error. Healthcheck was upgraded to a literal `psql -tAc 'SELECT 1'` query so future failures of this class fail the compose probe.
 
 ## TODOs
 

@@ -179,7 +179,11 @@ services:
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      # pg_isready only proves the postmaster is listening; it returned "OK"
+      # during the 2026-05-19 incident even as every real query died on
+      # 'global/pg_filenode.map: Permission denied'. Run an actual SELECT so
+      # the healthcheck exercises the query path end-to-end.
+      test: ["CMD-SHELL", "psql -U postgres -d postgres -tAc 'SELECT 1' | grep -q '^1$$'"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -343,6 +347,10 @@ services:
     restart: unless-stopped
     logging: *default-logging
     networks: [apartment]
+    # Match the data-dir uid asserted by the VM startup script (volume_owners
+    # map in terraform/variables.tf). Default image runs as root; pinning
+    # makes the container, the bind-mount, and the runbook agree on uid 1001.
+    user: "1001:1001"
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
